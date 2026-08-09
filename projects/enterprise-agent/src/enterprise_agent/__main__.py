@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from .benchmark import BenchmarkRunner, STRATEGIES, write_report
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .store import SQLiteEventStore
@@ -40,6 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("list", help="List persisted tasks")
     trace_parser = subparsers.add_parser("trace", help="Show persisted spans and latency metrics")
     trace_parser.add_argument("task_id")
+    benchmark_parser = subparsers.add_parser("benchmark", help="Compare agent orchestration strategies")
+    benchmark_parser.add_argument(
+        "--strategies",
+        nargs="+",
+        choices=tuple(STRATEGIES),
+        default=list(STRATEGIES),
+    )
+    benchmark_parser.add_argument("--repetitions", type=int, default=1)
+    benchmark_parser.add_argument("--output", default="work/benchmark-report.json")
+    benchmark_parser.add_argument("--workspace", help="Keep isolated run databases in this directory")
     return parser
 
 
@@ -81,6 +92,20 @@ def main() -> None:
             ],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if args.command == "benchmark":
+        report = BenchmarkRunner(strategy_names=tuple(args.strategies)).run(
+            repetitions=args.repetitions,
+            workspace=args.workspace,
+        )
+        write_report(report, args.output)
+        print(
+            json.dumps(
+                {"output": args.output, "dataset_version": report["dataset_version"], "aggregates": report["aggregates"]},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
 
     rules = tuple(getattr(args, "inject_fault", []))

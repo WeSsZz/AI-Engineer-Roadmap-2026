@@ -12,7 +12,7 @@ Runtime Layer
   State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime
 
 Platform Layer
-  Persistent Trace / API (planned) / Scheduler (planned) / Evaluation
+  Persistent Trace / Benchmark Runner / API (planned) / Scheduler (planned)
 ```
 
 ## 当前数据流
@@ -103,6 +103,24 @@ runtime.run / runtime.resume
 ```
 
 每个 Tool 重试 attempt 都是独立 Span，因此能区分“最终成功”与“前序尝试失败”。硬进程退出可能留下 `running` Span，查询汇总会单独报告，而不会将其伪装为成功。详细语义见 [`docs/observability.md`](docs/observability.md)。
+
+## 评测隔离
+
+```mermaid
+flowchart LR
+    DS["Versioned Incident Cases"] --> FW["Fixed Workflow"]
+    DS --> SA["Single Agent"]
+    DS --> PE["Plan + Executor"]
+    DS --> MA["Multi-Agent"]
+    FW --> ISO["Isolated Runtime + SQLite"]
+    SA --> ISO
+    PE --> ISO
+    MA --> ISO
+    ISO --> SC["Unified Scorer"]
+    SC --> RP["JSON Report"]
+```
+
+每个 strategy × case × repetition 使用独立目录和 Runtime，避免 rate limit、circuit breaker、fault counter、ticket idempotency 和 Trace 相互污染。评分逻辑与策略实现分离，负样本必须安全拒绝才算任务成功。详细方法见 [`docs/benchmarking.md`](docs/benchmarking.md)。
 
 ## 规划中的检索链路
 

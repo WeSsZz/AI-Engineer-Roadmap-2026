@@ -36,6 +36,8 @@
 - failpoint 模拟进程在关键故障窗口中断
 - Fault Injector 可确定性模拟 transient、permanent 和 timeout 数据源故障
 - Metrics、Logs、Runbook 证据交叉一致后才输出高置信根因
+- Fixed Workflow、Single-Agent、Plan-Executor、Multi-Agent 统一评测器
+- 版本化事故数据集、隔离运行目录和可复现 JSON benchmark report
 
 当前演示任务：
 
@@ -80,6 +82,16 @@ PYTHONPATH=src python -m enterprise_agent \
   --db work/enterprise_agent.db trace TASK_ID
 ```
 
+运行四种架构的对比评测：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent benchmark \
+  --repetitions 5 \
+  --output work/benchmark-report.json
+```
+
+只运行部分策略可使用 `--strategies single_agent multi_agent`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
+
 运行测试：
 
 ```bash
@@ -113,11 +125,13 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
+│   ├── benchmark.py       # 数据集、四种策略、评分与报告
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
 │   ├── agents.py          # Specialist、Verifier、Synthesis
 │   └── models.py          # Task、State、Evidence、Event 合同
 ├── tests/
+├── benchmarks/            # 已执行的版本化基准报告
 ├── docs/
 ├── architecture.md
 └── evaluation.md
@@ -130,6 +144,7 @@ enterprise-agent/
 - [`docs/tool-gateway.md`](docs/tool-gateway.md)：可靠工具调用与错误处理语义
 - [`docs/observability.md`](docs/observability.md)：持久化 Trace、Span 层级与延迟指标
 - [`docs/incident-response.md`](docs/incident-response.md)：运维证据链、故障注入与安全处置
+- [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -142,7 +157,7 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
+1. 扩充保留测试集，并接入真实模型统计 token、成本和非确定性方差。
 2. Dense + BM25 + Rerank 检索和真实模型适配器。
 3. Worker lease、取消传播和分布式任务抢占。
 4. OpenTelemetry exporter、跨服务 trace context 和指标后端。
