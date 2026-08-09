@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-agent-harness"
+version = "0.1.0"
+description = "A dependency-light, evaluation-friendly enterprise multi-agent harness prototype."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+enterprise-agent = "enterprise_agent.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
