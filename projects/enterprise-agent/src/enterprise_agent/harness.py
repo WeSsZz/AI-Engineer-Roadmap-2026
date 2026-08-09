@@ -48,12 +48,23 @@ class EnterpriseAgentHarness:
         store: SQLiteEventStore | None = None,
     ):
         self.store = store or SQLiteEventStore()
+        self._owns_runtime = runtime is None
         self.runtime = runtime or build_demo_runtime(self.store.path)
         self.context_engine = context_engine or ContextEngine(max_context_chars=12_000)
         self.researcher = KnowledgeResearcher()
         self.analyst = DataAnalyst()
         self.verifier = Verifier()
         self.synthesis = SynthesisAgent()
+
+    def close(self) -> None:
+        if self._owns_runtime:
+            self.runtime.close()
+
+    def __enter__(self) -> EnterpriseAgentHarness:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
 
     def run(
         self,
@@ -277,7 +288,7 @@ class EnterpriseAgentHarness:
                 execution,
                 "agent_completed",
                 result.agent_name,
-                {"status": result.status, "summary": result.summary},
+                {"status": result.status, "summary": result.summary, "tool_call": result.data.get("tool_call")},
             )
 
     def _execute_action(self, execution: StoredExecution) -> None:
@@ -293,6 +304,7 @@ class EnterpriseAgentHarness:
                 "approval_token": "APPROVED_BY_USER",
                 "idempotency_key": pending_action["action_id"],
             },
+            task_id=execution.task.task_id,
         )
         if ticket_output.status != "completed":
             raise RuntimeError(f"Action executor returned unexpected status: {ticket_output.status}")
@@ -301,7 +313,7 @@ class EnterpriseAgentHarness:
             execution,
             "action_result",
             "action_executor",
-            {"status": ticket_output.status, "data": ticket_output.data},
+            {"status": ticket_output.status, "data": ticket_output.data, "tool_call": ticket_output.metadata},
         )
 
     def _checkpoint(self, execution: StoredExecution) -> None:

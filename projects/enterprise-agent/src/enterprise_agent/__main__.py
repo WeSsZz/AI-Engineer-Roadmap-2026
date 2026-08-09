@@ -56,18 +56,21 @@ def main() -> None:
 
     harness = EnterpriseAgentHarness(store=store)
     approval_token = "APPROVED_BY_USER" if args.approve else None
-    if args.command == "run":
-        result = harness.run(
-            args.objective,
-            approval_token=approval_token,
-            failpoint=args.failpoint,
-        )
-    else:
-        result = harness.resume(
-            args.task_id,
-            approval_token=approval_token,
-            failpoint=args.failpoint,
-        )
+    try:
+        if args.command == "run":
+            result = harness.run(
+                args.objective,
+                approval_token=approval_token,
+                failpoint=args.failpoint,
+            )
+        else:
+            result = harness.resume(
+                args.task_id,
+                approval_token=approval_token,
+                failpoint=args.failpoint,
+            )
+    finally:
+        harness.close()
     print_result(result, include_trace=args.trace)
 
 

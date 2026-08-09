@@ -46,7 +46,7 @@ flowchart TD
 | Runtime | 状态推进、checkpoint、resume、失败终止 | 业务领域推理 |
 | Agent | 决策、分析、验证和合成 | 直接持久化共享状态 |
 | Context | 模型可见上下文、压缩视图、token 预算 | 删除原始事件 |
-| Tool Runtime | 白名单、风险边界、受控执行、幂等 | 自主规划 |
+| Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
 | Event Store | Snapshot、事件轨迹、乐观锁 | 判断业务结论 |
 | Retrieval | 召回、融合、重排 | 业务写操作 |
 | Evaluation | 数据集、指标、回归测试、故障注入 | 修改线上行为 |
@@ -61,6 +61,22 @@ flowchart TD
 - Snapshot 用于快速恢复，append-only Event Log 用于审计和解释。
 
 详细语义见 [`docs/durable-runtime.md`](docs/durable-runtime.md)。
+
+## Tool Gateway 调用顺序
+
+```text
+Allowlist
+  -> Argument Schema
+  -> Approval / Idempotency Policy
+  -> Rate Limit
+  -> Circuit Breaker
+  -> Concurrency Slot
+  -> Handler + Timeout
+  -> Retry or Classified Failure
+  -> ToolCallRecord
+```
+
+瞬时错误和超时允许按策略重试；永久错误、权限错误、参数错误和容量拒绝不会盲目重试。详细语义见 [`docs/tool-gateway.md`](docs/tool-gateway.md)。
 
 ## 规划中的检索链路
 

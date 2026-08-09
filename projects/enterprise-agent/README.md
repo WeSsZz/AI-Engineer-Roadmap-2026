@@ -24,6 +24,10 @@
 - checkpoint 乐观锁，阻止两个 Worker 静默覆盖状态
 - 高风险动作先持久化，再绑定 `action_id` 等待人工审批
 - 写工具使用持久化 idempotency key
+- Tool Gateway 使用显式参数 Schema，拒绝缺失、未知、类型错误和非法参数
+- 按瞬时错误、永久错误、超时、权限和容量错误执行不同策略
+- 工具级超时、指数退避重试、并发上限、固定窗口限流和熔断
+- 每次工具尝试记录 call ID、task ID、耗时、错误类型和幂等键
 - Context Engine 保留结构化事实、证据引用和最近事件
 - failpoint 模拟进程在关键故障窗口中断
 
@@ -83,7 +87,8 @@ enterprise-agent/
 │   ├── harness.py         # 分阶段执行循环、resume 和 failpoint
 │   ├── state_machine.py   # 合法状态转换
 │   ├── store.py           # SQLite Snapshot、Event Log、乐观锁
-│   ├── tools.py           # 工具网关、审批和写操作幂等
+│   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
+│   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
 │   ├── agents.py          # Specialist、Verifier、Synthesis
 │   └── models.py          # Task、State、Evidence、Event 合同
@@ -97,6 +102,7 @@ enterprise-agent/
 
 - [`architecture.md`](architecture.md)：整体模块边界与数据流
 - [`docs/durable-runtime.md`](docs/durable-runtime.md)：checkpoint、恢复、审批和幂等语义
+- [`docs/tool-gateway.md`](docs/tool-gateway.md)：可靠工具调用与错误处理语义
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -109,8 +115,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 工具参数 Schema、超时、分类重试、限流和熔断。
-2. 模型调用及工具调用的 span、耗时、token 和错误分类。
-3. Metrics、Logs、Runbook 三类运维工具。
-4. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
-5. Dense + BM25 + Rerank 检索和真实模型适配器。
+1. 将 ToolCallRecord 持久化为统一 Trace Span，并增加任务级 P50/P95 指标。
+2. Metrics、Logs、Runbook 三类运维工具和故障注入适配器。
+3. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
+4. Dense + BM25 + Rerank 检索和真实模型适配器。
+5. Worker lease、取消传播和分布式任务抢占。

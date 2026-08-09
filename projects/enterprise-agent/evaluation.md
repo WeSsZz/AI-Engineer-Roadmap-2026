@@ -37,6 +37,16 @@
 - 每请求 token 或估算成本
 - 错误率
 
+### Tool Gateway
+
+- Schema rejection rate
+- Retry recovery rate
+- Timeout rate
+- Circuit-open rejection rate
+- Concurrency/rate-limit rejection rate
+- 每个工具的 P50 / P95 latency
+- 平均 attempts / call
+
 ## 检索实验
 
 | Run | 方法 | Recall@5 | MRR | P95 延迟 | 备注 |
@@ -53,6 +63,15 @@
 | A0 | 固定 Workflow |  |  |  |  |
 | A1 | 单 Agent |  |  |  |  |
 | A2 | Planner/Executor |  |  |  |  |
+
+## Tool Gateway 实验
+
+| Run | 策略 | Recovery Rate | Invalid Call Rate | P95 延迟 | 平均 Attempts |
+| --- | --- | ---: | ---: | ---: | ---: |
+| G0 | 无策略 baseline |  |  |  |  |
+| G1 | Schema + 分类错误 |  |  |  |  |
+| G2 | Timeout + Retry |  |  |  |  |
+| G3 | Rate Limit + Circuit Breaker |  |  |  |  |
 
 ## 失败案例
 

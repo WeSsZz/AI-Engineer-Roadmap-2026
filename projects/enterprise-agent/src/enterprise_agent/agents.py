@@ -15,12 +15,13 @@ class KnowledgeResearcher:
             "search_docs",
             allowed_tools=task.allowed_tools,
             arguments={"query": task.objective},
+            task_id=task.task_id,
         )
         return AgentResult(
             agent_name=self.name,
             status="completed" if result.data["count"] else "failed",
             summary="检索到相关企业文档" if result.data["count"] else "未找到相关企业文档",
-            data=result.data,
+            data={**result.data, "tool_call": result.metadata},
             evidence=list(result.evidence),
             warnings=[] if result.data["count"] else ["需要用户补充领域或关键词"],
         )
@@ -35,6 +36,7 @@ class DataAnalyst:
             "query_metrics",
             allowed_tools=task.allowed_tools,
             arguments={"region": region},
+            task_id=task.task_id,
         )
         rows = result.data["rows"]
         if len(rows) < 2:
@@ -49,7 +51,14 @@ class DataAnalyst:
             agent_name=self.name,
             status="completed",
             summary="完成只读指标分析",
-            data={"region": region, "current": current, "previous": previous, "order_change": change, "facts": facts},
+            data={
+                "region": region,
+                "current": current,
+                "previous": previous,
+                "order_change": change,
+                "facts": facts,
+                "tool_call": result.metadata,
+            },
             evidence=list(result.evidence),
         )
 

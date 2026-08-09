@@ -3,6 +3,7 @@
 from .harness import EnterpriseAgentHarness, SimulatedInterruption, TaskRunResult
 from .models import TaskStatus
 from .store import SQLiteEventStore
+from .tool_gateway import ToolRuntime
 
 __all__ = [
     "EnterpriseAgentHarness",
@@ -10,4 +11,5 @@ __all__ = [
     "SimulatedInterruption",
     "TaskRunResult",
     "TaskStatus",
+    "ToolRuntime",
 ]

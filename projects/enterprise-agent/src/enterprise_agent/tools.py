@@ -2,56 +2,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .models import Evidence
-
-
-class ToolError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class ToolOutput:
-    tool_name: str
-    status: str
-    data: dict[str, Any]
-    evidence: tuple[Evidence, ...] = ()
-    message: str = ""
-
-
-@dataclass(frozen=True)
-class ToolSpec:
-    name: str
-    description: str
-    risk_level: str
-    handler: Callable[..., ToolOutput]
-
-
-class ToolRuntime:
-    """Allowlisted tool runtime with an explicit write boundary."""
-
-    def __init__(self) -> None:
-        self._tools: dict[str, ToolSpec] = {}
-
-    def register(self, spec: ToolSpec) -> None:
-        self._tools[spec.name] = spec
-
-    def invoke(
-        self,
-        name: str,
-        *,
-        allowed_tools: tuple[str, ...],
-        arguments: dict[str, Any],
-    ) -> ToolOutput:
-        if name not in allowed_tools:
-            raise ToolError(f"Tool '{name}' is not allowed for this task")
-        spec = self._tools.get(name)
-        if spec is None:
-            raise ToolError(f"Unknown tool '{name}'")
-        return spec.handler(**arguments)
+from .tool_gateway import ArgumentSpec, ToolError, ToolOutput, ToolPolicy, ToolRuntime, ToolSpec
 
 
 def build_demo_runtime(database_path: str | Path | None = None) -> ToolRuntime:
@@ -161,16 +116,6 @@ def build_demo_runtime(database_path: str | Path | None = None) -> ToolRuntime:
         approval_token: str | None = None,
         idempotency_key: str | None = None,
     ) -> ToolOutput:
-        if approval_token != "APPROVED_BY_USER":
-            return ToolOutput(
-                tool_name="create_ticket",
-                status="needs_approval",
-                data={"title": title, "description": description},
-                message="Write action prepared; explicit human approval is required",
-            )
-        if not idempotency_key:
-            raise ToolError("Write tools require an idempotency_key")
-
         replayed = False
         if ticket_database is None:
             ticket = in_memory_tickets.get(idempotency_key)
@@ -187,11 +132,26 @@ def build_demo_runtime(database_path: str | Path | None = None) -> ToolRuntime:
                     (idempotency_key,),
                 ).fetchone()
                 if existing is None:
-                    cursor = connection.execute(
-                        "INSERT INTO demo_tickets(idempotency_key, title, description) VALUES (?, ?, ?)",
-                        (idempotency_key, title, description),
-                    )
-                    ticket = {"id": f"INC-{cursor.lastrowid:04d}", "title": title, "description": description}
+                    try:
+                        cursor = connection.execute(
+                            "INSERT INTO demo_tickets(idempotency_key, title, description) VALUES (?, ?, ?)",
+                            (idempotency_key, title, description),
+                        )
+                        ticket = {"id": f"INC-{cursor.lastrowid:04d}", "title": title, "description": description}
+                    except sqlite3.IntegrityError:
+                        # Another worker won the same idempotent write race.
+                        existing = connection.execute(
+                            "SELECT id, title, description FROM demo_tickets WHERE idempotency_key = ?",
+                            (idempotency_key,),
+                        ).fetchone()
+                        if existing is None:
+                            raise
+                        replayed = True
+                        ticket = {
+                            "id": f"INC-{existing['id']:04d}",
+                            "title": existing["title"],
+                            "description": existing["description"],
+                        }
                 else:
                     replayed = True
                     ticket = {
@@ -206,7 +166,52 @@ def build_demo_runtime(database_path: str | Path | None = None) -> ToolRuntime:
             message="Existing ticket replayed" if replayed else "Ticket created",
         )
 
-    runtime.register(ToolSpec("search_docs", "Search internal documents", "low", search_docs))
-    runtime.register(ToolSpec("query_metrics", "Read-only business metrics query", "low", query_metrics))
-    runtime.register(ToolSpec("create_ticket", "Create an IT/operations ticket", "high", create_ticket))
+    runtime.register(
+        ToolSpec(
+            name="search_docs",
+            description="Search internal documents",
+            risk_level="low",
+            handler=search_docs,
+            arguments={
+                "query": ArgumentSpec(str, validator=lambda value: bool(value.strip())),
+                "top_k": ArgumentSpec(int, required=False, validator=lambda value: 1 <= value <= 20),
+            },
+            policy=ToolPolicy(timeout_seconds=2.0, max_retries=1, max_concurrency=8, rate_limit_calls=100),
+        )
+    )
+    runtime.register(
+        ToolSpec(
+            name="query_metrics",
+            description="Read-only business metrics query",
+            risk_level="low",
+            handler=query_metrics,
+            arguments={
+                "region": ArgumentSpec(str, validator=lambda value: value in {"华东", "华南"}),
+                "month": ArgumentSpec(str, required=False, validator=lambda value: bool(re.fullmatch(r"\d{4}-\d{2}", value))),
+            },
+            policy=ToolPolicy(timeout_seconds=2.0, max_retries=2, max_concurrency=4, rate_limit_calls=60),
+        )
+    )
+    runtime.register(
+        ToolSpec(
+            name="create_ticket",
+            description="Create an IT/operations ticket",
+            risk_level="high",
+            handler=create_ticket,
+            arguments={
+                "title": ArgumentSpec(str, validator=lambda value: 1 <= len(value) <= 200),
+                "description": ArgumentSpec(str, validator=lambda value: bool(value.strip())),
+                "approval_token": ArgumentSpec(str),
+                "idempotency_key": ArgumentSpec(str, validator=lambda value: bool(value.strip())),
+            },
+            policy=ToolPolicy(
+                timeout_seconds=3.0,
+                max_retries=1,
+                max_concurrency=2,
+                rate_limit_calls=20,
+                requires_approval=True,
+                idempotency_required=True,
+            ),
+        )
+    )
     return runtime
