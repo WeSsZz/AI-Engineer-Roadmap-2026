@@ -11,7 +11,7 @@ Event Log 记录任务发生了什么，适合审计和恢复；Span 记录一�
 - `span_id`：单次操作唯一标识。
 - `trace_id`：当前使用稳定的 `task_id`，使多次恢复属于同一条逻辑 Trace。
 - `parent_span_id`：建立 Runtime → Agent → Tool 的调用树。
-- `kind` 与 `name`：区分 runtime、agent、tool 以及具体操作。
+- `kind` 与 `name`：区分 runtime、agent、tool、model 以及具体操作。
 - 开始/结束时间、毫秒耗时、状态和错误类型。
 - 低基数结构化 attributes；不写入密钥、审批 token 或完整业务正文。
 
@@ -37,6 +37,8 @@ PYTHONPATH=src python -m enterprise_agent \
 - P50/P95 延迟，使用 deterministic nearest-rank 算法。
 
 未结束 Span 不参与延迟和错误率计算，并单独计入 `running_count`。生产版本应由恢复扫描器结合 Worker lease 判断它们是仍在执行还是已经中断。
+
+Model Span 额外记录 prompt/completion/total tokens 和 prompt cache hit/miss tokens，不记录 API key、完整 prompt、隐藏推理内容或原始模型响应。
 
 ## 当前边界
 

@@ -9,7 +9,7 @@ Agent Layer
   Metrics Investigator / Log Investigator / Runbook Researcher / Verifier / Synthesis
 
 Runtime Layer
-  State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime
+  State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime / Model Provider
 
 Platform Layer
   Persistent Trace / Benchmark Runner / API (planned) / Scheduler (planned)
@@ -43,6 +43,7 @@ flowchart TD
     R --> TR["Runtime Span"]
     TR --> AS["Agent Spans"]
     AS --> TS["Tool Attempt Spans"]
+    AS --> MS["Model Attempt Spans"]
 ```
 
 ## 模块边界
@@ -53,6 +54,7 @@ flowchart TD
 | Agent | 决策、分析、验证和合成 | 直接持久化共享状态 |
 | Context | 模型可见上下文、压缩视图、token 预算 | 删除原始事件 |
 | Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
+| Model Provider | JSON 请求、重试、响应解析、usage 记录 | 改写已验证证据或执行工具 |
 | Event Store | Snapshot、事件轨迹、乐观锁 | 判断业务结论 |
 | Trace Recorder | Span 生命周期、父子关系、延迟与错误聚合 | 替代业务事件或完整日志正文 |
 | Fault Injector | 在 provider adapter 边界复现瞬时、永久和超时故障 | 绕过 Gateway 策略 |
@@ -98,6 +100,7 @@ runtime.run / runtime.resume
   │     └── tool.get_runbook
   ├── agent.verifier
   ├── agent.incident_synthesis_agent
+  │     └── model.deepseek.deepseek-v4-flash
   └── agent.action_executor
         └── tool.create_ticket
 ```

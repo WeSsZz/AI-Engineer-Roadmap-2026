@@ -38,6 +38,8 @@
 - Metrics、Logs、Runbook 证据交叉一致后才输出高置信根因
 - Fixed Workflow、Single-Agent、Plan-Executor、Multi-Agent 统一评测器
 - 版本化事故数据集、隔离运行目录和可复现 JSON benchmark report
+- DeepSeek V4 Flash 结构化综合适配器，保留 deterministic 模式
+- Model attempt Span 记录模型、延迟、token 和 prompt cache 命中
 
 当前演示任务：
 
@@ -60,6 +62,22 @@ PYTHONPATH=src python -m enterprise_agent \
 ```
 
 格式为 `TOOL:MODE[:TIMES]`，mode 支持 `transient`、`permanent`、`timeout`。
+
+配置 DeepSeek V4 Flash（密钥只从环境读取）：
+
+```bash
+export DEEPSEEK_API_KEY="your-key"
+
+PYTHONPATH=src python -m enterprise_agent model-smoke
+
+PYTHONPATH=src python -m enterprise_agent \
+  --db work/deepseek-agent.db run \
+  --llm-provider deepseek \
+  --model deepseek-v4-flash \
+  --thinking disabled
+```
+
+模型当前只综合已经通过 Verifier 的证据；它不能直接调用企业写工具、授予审批或扩展 evidence allowlist。默认仍为 `deterministic`，因此测试和 benchmark 不需要密钥。
 
 默认停在 `needs_approval`，输出包含 `task_id` 和已经固定的 `pending_action`。审批并恢复：
 
@@ -126,6 +144,7 @@ enterprise-agent/
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
 │   ├── benchmark.py       # 数据集、四种策略、评分与报告
+│   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
 │   ├── agents.py          # Specialist、Verifier、Synthesis
@@ -145,6 +164,7 @@ enterprise-agent/
 - [`docs/observability.md`](docs/observability.md)：持久化 Trace、Span 层级与延迟指标
 - [`docs/incident-response.md`](docs/incident-response.md)：运维证据链、故障注入与安全处置
 - [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
+- [`docs/model-provider.md`](docs/model-provider.md)：DeepSeek 配置、结构化契约和失败语义
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -157,7 +177,7 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 扩充保留测试集，并接入真实模型统计 token、成本和非确定性方差。
+1. 使用真实 API key 执行 smoke，并把模型 token、成本和非确定性方差接入 benchmark。
 2. Dense + BM25 + Rerank 检索和真实模型适配器。
 3. Worker lease、取消传播和分布式任务抢占。
 4. OpenTelemetry exporter、跨服务 trace context 和指标后端。

@@ -17,6 +17,7 @@ from .agents import (
 )
 from .context import ContextEngine
 from .faults import FaultInjector
+from .llm import LLMProvider
 from .models import AgentResult, Budget, Event, SpanKind, TaskEnvelope, TaskState, TaskStatus
 from .state_machine import TERMINAL_STATUSES, transition
 from .store import ConcurrentCheckpointError, SQLiteEventStore, StoredExecution
@@ -58,6 +59,7 @@ class EnterpriseAgentHarness:
         context_engine: ContextEngine | None = None,
         store: SQLiteEventStore | None = None,
         fault_injector: FaultInjector | None = None,
+        llm_provider: LLMProvider | None = None,
     ):
         self.store = store or SQLiteEventStore()
         self.tracer = SQLiteTraceRecorder(self.store)
@@ -70,6 +72,9 @@ class EnterpriseAgentHarness:
         if runtime is not None:
             self.runtime.set_record_sink(self.tracer.record_tool_call)
         self.context_engine = context_engine or ContextEngine(max_context_chars=12_000)
+        self.llm_provider = llm_provider
+        if self.llm_provider is not None:
+            self.llm_provider.set_record_sink(self.tracer.record_model_call)
         self.researcher = KnowledgeResearcher()
         self.analyst = DataAnalyst()
         self.verifier = Verifier()
@@ -77,7 +82,7 @@ class EnterpriseAgentHarness:
         self.metrics_investigator = MetricsInvestigator()
         self.log_investigator = LogInvestigator()
         self.runbook_researcher = RunbookResearcher()
-        self.incident_synthesis = IncidentSynthesisAgent()
+        self.incident_synthesis = IncidentSynthesisAgent(self.llm_provider)
 
     def close(self) -> None:
         if self._owns_runtime:
@@ -116,7 +121,11 @@ class EnterpriseAgentHarness:
             ),
             budget=Budget(),
             risk_level="medium" if "工单" in objective or "创建" in objective else "low",
-            metadata={"scenario": selected_scenario},
+            metadata={
+                "scenario": selected_scenario,
+                "llm_provider": self.llm_provider.name if self.llm_provider else "deterministic",
+                "llm_model": self.llm_provider.model if self.llm_provider else None,
+            },
         )
         if max_context_chars is not None:
             self.context_engine.max_context_chars = max_context_chars
@@ -253,6 +262,7 @@ class EnterpriseAgentHarness:
                             execution.state,
                             context,
                             execution.agent_results,
+                            trace_parent_id=span.span_id,
                         )
                         span.set_attribute("result_status", synthesis.status)
                         # A guarded refusal is valid runtime behavior, while still
@@ -420,7 +430,19 @@ class EnterpriseAgentHarness:
         return [self.researcher, self.analyst]
 
     def _synthesis_agent(self, task: TaskEnvelope) -> SynthesisAgent | IncidentSynthesisAgent:
-        return self.incident_synthesis if task.metadata.get("scenario") == "incident" else self.synthesis
+        if task.metadata.get("scenario") != "incident":
+            return self.synthesis
+        expected_provider = task.metadata.get("llm_provider", "deterministic")
+        expected_model = task.metadata.get("llm_model")
+        if expected_provider != "deterministic":
+            if self.llm_provider is None:
+                raise RuntimeError(f"Task requires LLM provider '{expected_provider}' to resume synthesis")
+            if self.llm_provider.name != expected_provider or self.llm_provider.model != expected_model:
+                raise RuntimeError(
+                    f"Task requires {expected_provider}/{expected_model}, got "
+                    f"{self.llm_provider.name}/{self.llm_provider.model}"
+                )
+        return self.incident_synthesis
 
     @staticmethod
     def _detect_scenario(objective: str) -> str:

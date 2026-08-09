@@ -35,6 +35,7 @@
 
 - P50 / P95 延迟
 - 每请求 token 或估算成本
+- Prompt cache hit/miss tokens 与模型 attempt 数
 - 错误率
 - Trace 完整率：具有 Runtime→Agent→Tool 可达父链的 Span 比例
 - 孤儿/未结束 Span 数量：发现进程硬退出和埋点缺口
@@ -70,6 +71,8 @@
 | A3 | Multi-Agent | 1.000 | 0.800 | 9.515 | 89.395 | 3.4 |
 
 四种策略在这个小型确定性数据集上的根因准确率、安全拒绝率、证据完整率和故障恢复率均为 1.0。当前证据只支持：自适应 Single-Agent/Plan-Executor 在健康 case 少做无关调用；Multi-Agent 的 checkpoint、并行 Span 和交叉验证带来可观察的固定开销。它不支持“Multi-Agent 质量普遍更高”的结论。
+
+当前已接入 DeepSeek V4 Flash Provider，但已提交的基准仍标记为 `deterministic_synthetic_no_llm`。在未使用真实 API key 重跑并记录重复采样前，不把 mock 测试结果写成模型效果或成本结论。
 
 ## Tool Gateway 实验
 

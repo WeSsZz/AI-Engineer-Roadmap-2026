@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Any
 
 from .models import SpanKind, SpanStatus, TraceSpan
+from .llm import LLMCallRecord
 from .store import SQLiteEventStore
 from .tool_gateway import ToolCallRecord
 
@@ -118,6 +119,35 @@ class SQLiteTraceRecorder:
                     "attempt": record.attempt,
                     "gateway_status": record.status,
                     "idempotency_key": record.idempotency_key,
+                },
+                error_type=record.error_type,
+            )
+        )
+
+    def record_model_call(self, record: LLMCallRecord) -> None:
+        if record.task_id is None or record.trace_id is None:
+            return
+        started = datetime.fromisoformat(record.started_at)
+        finished = started + timedelta(milliseconds=record.duration_ms)
+        self.store.record_span(
+            TraceSpan(
+                span_id=f"{record.call_id}-attempt-{record.attempt}",
+                trace_id=record.trace_id,
+                task_id=record.task_id,
+                parent_span_id=record.parent_span_id,
+                name=f"model.{record.provider}.{record.model}",
+                kind=SpanKind.MODEL,
+                status=SpanStatus.COMPLETED if record.status == "completed" else SpanStatus.ERROR,
+                started_at=record.started_at,
+                finished_at=finished.isoformat(),
+                duration_ms=record.duration_ms,
+                attributes={
+                    "attempt": record.attempt,
+                    "prompt_tokens": record.usage.prompt_tokens,
+                    "completion_tokens": record.usage.completion_tokens,
+                    "total_tokens": record.usage.total_tokens,
+                    "prompt_cache_hit_tokens": record.usage.prompt_cache_hit_tokens,
+                    "prompt_cache_miss_tokens": record.usage.prompt_cache_miss_tokens,
                 },
                 error_type=record.error_type,
             )

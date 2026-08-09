@@ -26,6 +26,7 @@ class SpanKind(str, Enum):
     RUNTIME = "runtime"
     AGENT = "agent"
     TOOL = "tool"
+    MODEL = "model"
 
 
 class SpanStatus(str, Enum):

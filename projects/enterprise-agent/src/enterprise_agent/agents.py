@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from typing import Any
 
 from .context import ContextSnapshot
+from .llm import LLMError, LLMProvider, LLMResponseError
 from .models import AgentResult, Evidence, TaskEnvelope, TaskState
 from .tools import ToolError, ToolRuntime
 
@@ -242,6 +245,7 @@ class SynthesisAgent:
         state: TaskState,
         context: ContextSnapshot,
         results: list[AgentResult],
+        trace_parent_id: str | None = None,
     ) -> AgentResult:
         analyst = next((r for r in results if r.agent_name == "data_analyst"), None)
         researcher = next((r for r in results if r.agent_name == "knowledge_researcher"), None)
@@ -280,12 +284,16 @@ class SynthesisAgent:
 class IncidentSynthesisAgent:
     name = "incident_synthesis_agent"
 
+    def __init__(self, llm_provider: LLMProvider | None = None) -> None:
+        self.llm_provider = llm_provider
+
     def run(
         self,
         task: TaskEnvelope,
         state: TaskState,
         context: ContextSnapshot,
         results: list[AgentResult],
+        trace_parent_id: str | None = None,
     ) -> AgentResult:
         metrics = next((result for result in results if result.agent_name == "metrics_investigator"), None)
         logs = next((result for result in results if result.agent_name == "log_investigator"), None)
@@ -302,14 +310,44 @@ class IncidentSynthesisAgent:
             and runbook
             and runbook.data.get("runbook")
         )
+        model_metadata: dict[str, Any] | None = None
+        model_error: str | None = None
+        if correlated and self.llm_provider is not None:
+            try:
+                response = self.llm_provider.complete_json(
+                    system_prompt=(
+                        "You are an enterprise incident synthesis agent. Return only a JSON object. "
+                        "Never invent evidence or claim an action was executed. Required JSON schema: "
+                        '{"root_cause":"database_pool_exhaustion","confidence":"high",'
+                        '"answer":"string","recommendation":"string","evidence_refs":["string"]}.'
+                    ),
+                    user_prompt=self._model_input(task, metrics, logs, runbook, evidence),
+                    task_id=task.task_id,
+                    trace_id=task.task_id,
+                    parent_span_id=trace_parent_id,
+                )
+                answer, recommendation = self._validate_model_output(response.data, evidence)
+                model_metadata = {
+                    "provider": response.provider,
+                    "model": response.model,
+                    "call_id": response.call_id,
+                    "attempts": response.attempts,
+                    "latency_ms": round(response.latency_ms, 3),
+                    "finish_reason": response.finish_reason,
+                    "usage": asdict(response.usage),
+                }
+            except (LLMError, ValueError) as exc:
+                correlated = False
+                model_error = f"{type(exc).__name__}: {exc}"
         if correlated:
-            service = metrics.data["service"]
-            answer = (
-                f"{service} 当前事故的高置信根因是数据库连接池耗尽：连接池利用率 "
-                f"{metrics.data['db_pool_utilization']:.1%}，错误率 {metrics.data['error_rate']:.1%}，"
-                "日志同时出现 DB_POOL_TIMEOUT 与 HTTP_503。"
-            )
-            recommendation = "按 Runbook 暂停非必要批处理，检查慢查询和最近发布；经值班负责人审批后扩容或回滚。"
+            if model_metadata is None:
+                service = metrics.data["service"]
+                answer = (
+                    f"{service} 当前事故的高置信根因是数据库连接池耗尽：连接池利用率 "
+                    f"{metrics.data['db_pool_utilization']:.1%}，错误率 {metrics.data['error_rate']:.1%}，"
+                    "日志同时出现 DB_POOL_TIMEOUT 与 HTTP_503。"
+                )
+                recommendation = "按 Runbook 暂停非必要批处理，检查慢查询和最近发布；经值班负责人审批后扩容或回滚。"
             confidence = "high"
         else:
             answer = "运维证据未通过交叉验证，系统不会给出确定性根因或自动处置。"
@@ -319,6 +357,9 @@ class IncidentSynthesisAgent:
         state.artifacts["answer"] = answer
         state.artifacts["recommendation"] = recommendation
         state.artifacts["root_cause_confidence"] = confidence
+        state.artifacts["model_call"] = model_metadata
+        if model_error:
+            state.artifacts["model_error"] = model_error
         return AgentResult(
             self.name,
             "completed" if correlated else "failed",
@@ -328,7 +369,59 @@ class IncidentSynthesisAgent:
                 "recommendation": recommendation,
                 "root_cause_confidence": confidence,
                 "source_count": len(evidence),
+                "model_call": model_metadata,
+                "model_error": model_error,
             },
             evidence=evidence,
+            warnings=[model_error] if model_error else [],
             next_action="prepare_ticket" if correlated and "工单" in task.objective else None,
         )
+
+    @staticmethod
+    def _model_input(
+        task: TaskEnvelope,
+        metrics: AgentResult,
+        logs: AgentResult,
+        runbook: AgentResult,
+        evidence: list[Evidence],
+    ) -> str:
+        payload = {
+            "objective": task.objective,
+            "metrics": {
+                key: metrics.data[key]
+                for key in ("service", "error_rate", "baseline_error_rate", "p95_latency_ms", "db_pool_utilization")
+            },
+            "log_codes": logs.data.get("codes", []),
+            "log_counts": {entry["code"]: entry["count"] for entry in logs.data.get("entries", [])},
+            "runbook": {
+                "title": runbook.data["runbook"]["title"],
+                "steps": runbook.data["runbook"]["steps"],
+            },
+            "evidence_refs": [item.evidence_id for item in evidence],
+        }
+        return "Synthesize the verified evidence into the required JSON object:\n" + json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def _validate_model_output(data: dict[str, Any], evidence: list[Evidence]) -> tuple[str, str]:
+        if data.get("root_cause") != "database_pool_exhaustion" or data.get("confidence") != "high":
+            raise LLMResponseError("Model root cause or confidence violates the verified evidence contract")
+        answer = data.get("answer")
+        recommendation = data.get("recommendation")
+        refs = data.get("evidence_refs")
+        if not isinstance(answer, str) or not answer.strip() or len(answer) > 4000:
+            raise LLMResponseError("Model answer must be a non-empty string within 4000 characters")
+        if not isinstance(recommendation, str) or not recommendation.strip() or len(recommendation) > 4000:
+            raise LLMResponseError("Model recommendation must be a non-empty string within 4000 characters")
+        if not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs):
+            raise LLMResponseError("Model evidence_refs must be a string array")
+        available = {item.evidence_id for item in evidence}
+        if not set(refs).issubset(available):
+            raise LLMResponseError("Model cited evidence outside the verified evidence set")
+        cited_types = {item.source_type for item in evidence if item.evidence_id in refs}
+        if not {"service_metrics", "log_query", "runbook"}.issubset(cited_types):
+            raise LLMResponseError("Model must cite metrics, logs and runbook evidence")
+        return answer.strip(), recommendation.strip()
