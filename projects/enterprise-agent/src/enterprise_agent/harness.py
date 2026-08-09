@@ -5,8 +5,18 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from .agents import DataAnalyst, KnowledgeResearcher, SynthesisAgent, Verifier
+from .agents import (
+    DataAnalyst,
+    IncidentSynthesisAgent,
+    KnowledgeResearcher,
+    LogInvestigator,
+    MetricsInvestigator,
+    RunbookResearcher,
+    SynthesisAgent,
+    Verifier,
+)
 from .context import ContextEngine
+from .faults import FaultInjector
 from .models import AgentResult, Budget, Event, SpanKind, TaskEnvelope, TaskState, TaskStatus
 from .state_machine import TERMINAL_STATUSES, transition
 from .store import ConcurrentCheckpointError, SQLiteEventStore, StoredExecution
@@ -47,11 +57,16 @@ class EnterpriseAgentHarness:
         runtime: ToolRuntime | None = None,
         context_engine: ContextEngine | None = None,
         store: SQLiteEventStore | None = None,
+        fault_injector: FaultInjector | None = None,
     ):
         self.store = store or SQLiteEventStore()
         self.tracer = SQLiteTraceRecorder(self.store)
         self._owns_runtime = runtime is None
-        self.runtime = runtime or build_demo_runtime(self.store.path, self.tracer.record_tool_call)
+        self.runtime = runtime or build_demo_runtime(
+            self.store.path,
+            self.tracer.record_tool_call,
+            fault_injector=fault_injector,
+        )
         if runtime is not None:
             self.runtime.set_record_sink(self.tracer.record_tool_call)
         self.context_engine = context_engine or ContextEngine(max_context_chars=12_000)
@@ -59,6 +74,10 @@ class EnterpriseAgentHarness:
         self.analyst = DataAnalyst()
         self.verifier = Verifier()
         self.synthesis = SynthesisAgent()
+        self.metrics_investigator = MetricsInvestigator()
+        self.log_investigator = LogInvestigator()
+        self.runbook_researcher = RunbookResearcher()
+        self.incident_synthesis = IncidentSynthesisAgent()
 
     def close(self) -> None:
         if self._owns_runtime:
@@ -78,19 +97,36 @@ class EnterpriseAgentHarness:
         approval_token: str | None = None,
         max_context_chars: int | None = None,
         failpoint: str | None = None,
+        scenario: str | None = None,
     ) -> TaskRunResult:
+        selected_scenario = scenario or self._detect_scenario(objective)
+        if selected_scenario not in {"business", "incident"}:
+            raise ValueError("scenario must be 'business' or 'incident'")
         task = TaskEnvelope(
             task_id=f"task-{uuid.uuid4().hex[:8]}",
             objective=objective,
             constraints=constraints,
-            allowed_tools=("search_docs", "query_metrics", "create_ticket"),
+            allowed_tools=(
+                "search_docs",
+                "query_metrics",
+                "query_service_metrics",
+                "search_logs",
+                "get_runbook",
+                "create_ticket",
+            ),
             budget=Budget(),
             risk_level="medium" if "工单" in objective or "创建" in objective else "low",
+            metadata={"scenario": selected_scenario},
         )
         if max_context_chars is not None:
             self.context_engine.max_context_chars = max_context_chars
         execution = StoredExecution(task=task, state=TaskState(task_id=task.task_id), agent_results=[], events=[])
-        self._emit(execution, "task_created", "supervisor", {"objective": objective, "risk_level": task.risk_level})
+        self._emit(
+            execution,
+            "task_created",
+            "supervisor",
+            {"objective": objective, "risk_level": task.risk_level, "scenario": selected_scenario},
+        )
         self.store.create(execution)
         with self.tracer.start_span(
             trace_id=task.task_id,
@@ -183,13 +219,13 @@ class EnterpriseAgentHarness:
 
                 if status == TaskStatus.VERIFYING:
                     context = self.context_engine.build(execution.task, execution.state, execution.events)
-                    specialists = [
-                        result
-                        for result in execution.agent_results
-                        if result.agent_name in {self.researcher.name, self.analyst.name}
-                    ]
-                    with self._agent_span(execution, self.verifier.name, parent_span_id):
+                    specialist_names = {agent.name for agent in self._specialists(execution.task)}
+                    specialists = [result for result in execution.agent_results if result.agent_name in specialist_names]
+                    with self._agent_span(execution, self.verifier.name, parent_span_id) as span:
                         verify = self.verifier.run(execution.task, execution.state, context, specialists)
+                        span.set_attribute("result_status", verify.status)
+                        if verify.status == "failed":
+                            span.mark_error("AgentResultFailed")
                     execution.agent_results.append(verify)
                     self._emit(
                         execution,
@@ -210,13 +246,19 @@ class EnterpriseAgentHarness:
 
                 if status == TaskStatus.SYNTHESIZING:
                     context = self.context_engine.build(execution.task, execution.state, execution.events)
-                    with self._agent_span(execution, self.synthesis.name, parent_span_id):
-                        synthesis = self.synthesis.run(
+                    synthesis_agent = self._synthesis_agent(execution.task)
+                    with self._agent_span(execution, synthesis_agent.name, parent_span_id) as span:
+                        synthesis = synthesis_agent.run(
                             execution.task,
                             execution.state,
                             context,
                             execution.agent_results,
                         )
+                        span.set_attribute("result_status", synthesis.status)
+                        # A guarded refusal is valid runtime behavior, while still
+                        # counting as an unsuccessful agent operation for SLOs.
+                        if synthesis.status == "failed":
+                            span.mark_error("AgentResultFailed")
                     execution.agent_results.append(synthesis)
                     self._emit(
                         execution,
@@ -227,12 +269,14 @@ class EnterpriseAgentHarness:
                     if synthesis.status == "failed":
                         target = TaskStatus.FAILED
                     elif synthesis.next_action == "prepare_ticket":
+                        is_incident = execution.task.metadata.get("scenario") == "incident"
+                        service = "order-api" if "order-api" in execution.task.objective.lower() else "payment-api"
                         execution.state.artifacts["pending_action"] = {
                             "action_id": f"{execution.task.task_id}:create_ticket:1",
                             "tool_name": "create_ticket",
                             "risk_level": "high",
                             "arguments": {
-                                "title": "华东区域库存异常补货",
+                                "title": f"{service} P1 故障处置" if is_incident else "华东区域库存异常补货",
                                 "description": synthesis.data["recommendation"],
                             },
                         }
@@ -300,26 +344,26 @@ class EnterpriseAgentHarness:
 
     def _run_specialists(self, execution: StoredExecution, parent_span_id: str) -> None:
         context = self.context_engine.build(execution.task, execution.state, execution.events)
+        specialists = self._specialists(execution.task)
         self._emit(
             execution,
             "parallel_dispatch",
             "supervisor",
-            {"agents": [self.researcher.name, self.analyst.name]},
+            {"agents": [agent.name for agent in specialists]},
         )
-        def run_specialist(agent: KnowledgeResearcher | DataAnalyst) -> AgentResult:
+        def run_specialist(agent: Any) -> AgentResult:
             with self._agent_span(execution, agent.name, parent_span_id) as span:
-                return agent.run(execution.task, execution.state, context, self.runtime, span.span_id)
+                result = agent.run(execution.task, execution.state, context, self.runtime, span.span_id)
+                span.set_attribute("result_status", result.status)
+                if result.status == "failed":
+                    span.mark_error("AgentResultFailed")
+                return result
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [
-                pool.submit(run_specialist, self.researcher),
-                pool.submit(run_specialist, self.analyst),
-            ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(specialists)) as pool:
+            futures = [pool.submit(run_specialist, agent) for agent in specialists]
             results = [future.result() for future in futures]
         for result in results:
-            execution.state.completed_steps.append(
-                "knowledge_research" if result.agent_name == self.researcher.name else "metrics_analysis"
-            )
+            execution.state.completed_steps.append(result.agent_name)
             execution.state.evidence_refs.extend(evidence.evidence_id for evidence in result.evidence)
             execution.state.confirmed_facts.extend(result.data.get("facts", []))
             execution.agent_results.append(result)
@@ -369,6 +413,19 @@ class EnterpriseAgentHarness:
             name=f"agent.{agent_name}",
             kind=SpanKind.AGENT,
         )
+
+    def _specialists(self, task: TaskEnvelope) -> list[Any]:
+        if task.metadata.get("scenario") == "incident":
+            return [self.metrics_investigator, self.log_investigator, self.runbook_researcher]
+        return [self.researcher, self.analyst]
+
+    def _synthesis_agent(self, task: TaskEnvelope) -> SynthesisAgent | IncidentSynthesisAgent:
+        return self.incident_synthesis if task.metadata.get("scenario") == "incident" else self.synthesis
+
+    @staticmethod
+    def _detect_scenario(objective: str) -> str:
+        incident_terms = ("故障", "事故", "告警", "延迟", "错误率", "503", "payment-api", "order-api")
+        return "incident" if any(term in objective.lower() for term in incident_terms) else "business"
 
     @staticmethod
     def _emit(execution: StoredExecution, event_type: str, actor: str, payload: dict[str, Any]) -> None:

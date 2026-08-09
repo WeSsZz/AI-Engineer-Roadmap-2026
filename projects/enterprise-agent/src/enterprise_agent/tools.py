@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Callable
 
+from .faults import FaultInjector
 from .models import Evidence
 from .tool_gateway import ArgumentSpec, ToolCallRecord, ToolError, ToolOutput, ToolPolicy, ToolRuntime, ToolSpec
 
@@ -12,6 +13,7 @@ from .tool_gateway import ArgumentSpec, ToolCallRecord, ToolError, ToolOutput, T
 def build_demo_runtime(
     database_path: str | Path | None = None,
     record_sink: Callable[[ToolCallRecord], None] | None = None,
+    fault_injector: FaultInjector | None = None,
 ) -> ToolRuntime:
     runtime = ToolRuntime(record_sink=record_sink)
     ticket_database = Path(database_path) if database_path is not None else None
@@ -57,6 +59,101 @@ def build_demo_runtime(
         {"region": "华东", "month": "2026-06", "orders": 1220, "stockout_rate": 0.04, "cancel_rate": 0.02},
         {"region": "华南", "month": "2026-07", "orders": 1180, "stockout_rate": 0.05, "cancel_rate": 0.02},
     ]
+    service_metrics = {
+        "payment-api": {
+            "request_rate": 820,
+            "error_rate": 0.128,
+            "p95_latency_ms": 1840,
+            "db_pool_utilization": 0.98,
+            "baseline_error_rate": 0.012,
+            "baseline_p95_latency_ms": 240,
+        },
+        "order-api": {
+            "request_rate": 640,
+            "error_rate": 0.009,
+            "p95_latency_ms": 210,
+            "db_pool_utilization": 0.54,
+            "baseline_error_rate": 0.010,
+            "baseline_p95_latency_ms": 220,
+        },
+    }
+    service_logs = {
+        "payment-api": [
+            {"level": "ERROR", "code": "DB_POOL_TIMEOUT", "count": 317, "message": "checkout timed out after 500ms"},
+            {"level": "ERROR", "code": "HTTP_503", "count": 289, "message": "payment request failed upstream"},
+            {"level": "WARN", "code": "POOL_SATURATED", "count": 411, "message": "active connections reached pool limit"},
+        ],
+        "order-api": [
+            {"level": "WARN", "code": "SLOW_QUERY", "count": 12, "message": "query exceeded 200ms"},
+        ],
+    }
+    runbooks = {
+        "payment-api": {
+            "id": "runbook-payment-db-pool-v3",
+            "symptom": "database_pool_exhaustion",
+            "title": "Payment API 数据库连接池耗尽处置手册",
+            "steps": [
+                "确认 DB_POOL_TIMEOUT 与连接池利用率同时升高",
+                "检查最近发布与慢查询，暂停非必要批处理",
+                "经值班负责人审批后扩容连接池或回滚异常发布",
+                "持续观察错误率和 P95 延迟至少 15 分钟",
+            ],
+        }
+    }
+
+    def inject(tool_name: str) -> None:
+        if fault_injector is not None:
+            fault_injector.before_call(tool_name)
+
+    def query_service_metrics(service: str, window_minutes: int = 15) -> ToolOutput:
+        inject("query_service_metrics")
+        values = service_metrics[service]
+        evidence = Evidence(
+            evidence_id=f"metrics-{service}-{window_minutes}m",
+            source_type="service_metrics",
+            title=f"{service} golden signals ({window_minutes}m)",
+            excerpt=str(values),
+            locator=f"metrics://services/{service}?window={window_minutes}m",
+            metadata={"read_only": True, "window_minutes": window_minutes},
+        )
+        return ToolOutput(
+            "query_service_metrics",
+            "completed",
+            {"service": service, "window_minutes": window_minutes, **values},
+            evidence=(evidence,),
+        )
+
+    def search_logs(service: str, severity: str = "error", limit: int = 20) -> ToolOutput:
+        inject("search_logs")
+        minimum = severity.upper()
+        entries = [entry for entry in service_logs[service] if minimum != "ERROR" or entry["level"] == "ERROR"][:limit]
+        evidence = tuple(
+            Evidence(
+                evidence_id=f"logs-{service}-{entry['code'].lower()}",
+                source_type="log_query",
+                title=f"{service} {entry['code']}",
+                excerpt=f"{entry['message']} count={entry['count']}",
+                locator=f"logs://services/{service}?code={entry['code']}",
+                metadata={"read_only": True, "count": entry["count"]},
+            )
+            for entry in entries
+        )
+        return ToolOutput("search_logs", "completed", {"service": service, "entries": entries}, evidence=evidence)
+
+    def get_runbook(service: str, symptom: str) -> ToolOutput:
+        inject("get_runbook")
+        runbook = runbooks.get(service)
+        if runbook is None or runbook["symptom"] != symptom:
+            return ToolOutput("get_runbook", "completed", {"service": service, "runbook": None, "count": 0})
+        evidence = Evidence(
+            evidence_id=runbook["id"],
+            source_type="runbook",
+            title=runbook["title"],
+            excerpt="；".join(runbook["steps"]),
+            locator=f"runbooks://{runbook['id']}",
+            metadata={"read_only": True, "version": 3},
+        )
+        return ToolOutput("get_runbook", "completed", {"service": service, "runbook": runbook, "count": 1}, evidence=(evidence,))
     def search_docs(query: str, top_k: int = 3) -> ToolOutput:
         # A production version should use an analyzer/tokenizer. Keep the demo
         # dependency-free while still handling Chinese business keywords.
@@ -169,6 +266,46 @@ def build_demo_runtime(
             message="Existing ticket replayed" if replayed else "Ticket created",
         )
 
+    runtime.register(
+        ToolSpec(
+            name="query_service_metrics",
+            description="Query service golden signals and saturation metrics",
+            risk_level="low",
+            handler=query_service_metrics,
+            arguments={
+                "service": ArgumentSpec(str, validator=lambda value: value in service_metrics),
+                "window_minutes": ArgumentSpec(int, required=False, validator=lambda value: 1 <= value <= 1440),
+            },
+            policy=ToolPolicy(timeout_seconds=0.05, max_retries=2, retry_backoff_seconds=0.005, max_concurrency=8),
+        )
+    )
+    runtime.register(
+        ToolSpec(
+            name="search_logs",
+            description="Search structured service logs",
+            risk_level="low",
+            handler=search_logs,
+            arguments={
+                "service": ArgumentSpec(str, validator=lambda value: value in service_logs),
+                "severity": ArgumentSpec(str, required=False, validator=lambda value: value.lower() in {"error", "warn"}),
+                "limit": ArgumentSpec(int, required=False, validator=lambda value: 1 <= value <= 100),
+            },
+            policy=ToolPolicy(timeout_seconds=0.05, max_retries=1, retry_backoff_seconds=0.005, max_concurrency=8),
+        )
+    )
+    runtime.register(
+        ToolSpec(
+            name="get_runbook",
+            description="Retrieve the approved runbook for a service symptom",
+            risk_level="low",
+            handler=get_runbook,
+            arguments={
+                "service": ArgumentSpec(str, validator=lambda value: value in service_metrics),
+                "symptom": ArgumentSpec(str, validator=lambda value: bool(value.strip())),
+            },
+            policy=ToolPolicy(timeout_seconds=0.05, max_retries=1, retry_backoff_seconds=0.005, max_concurrency=8),
+        )
+    )
     runtime.register(
         ToolSpec(
             name="search_docs",

@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 
+from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .store import SQLiteEventStore
 
 
-DEFAULT_OBJECTIVE = "分析华东区域本月订单下降原因，并在确认库存问题后生成补货工单"
+DEFAULT_OBJECTIVE = "诊断 payment-api 错误率和延迟突增的根因，并生成故障工单"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,6 +21,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--approve", action="store_true", help="Approve the generated high-risk action")
     run_parser.add_argument("--trace", action="store_true", help="Print the complete event trace")
     run_parser.add_argument("--failpoint", help="Interrupt after a checkpoint for recovery testing")
+    run_parser.add_argument("--scenario", choices=("business", "incident"))
+    run_parser.add_argument(
+        "--inject-fault",
+        action="append",
+        type=_parse_fault,
+        default=[],
+        metavar="TOOL:MODE[:TIMES]",
+        help="Inject transient, permanent or timeout failures",
+    )
 
     resume_parser = subparsers.add_parser("resume", help="Resume a checkpointed task")
     resume_parser.add_argument("task_id")
@@ -43,6 +53,7 @@ def print_result(result: TaskRunResult, include_trace: bool) -> None:
         "pending_action": result.state.artifacts.get("pending_action"),
         "ticket": result.state.artifacts.get("ticket"),
         "context_compacted": result.context_compacted,
+        "root_cause_confidence": result.state.artifacts.get("root_cause_confidence"),
     }
     if include_trace:
         payload["events"] = [event.__dict__ for event in result.events]
@@ -72,7 +83,8 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
-    harness = EnterpriseAgentHarness(store=store)
+    rules = tuple(getattr(args, "inject_fault", []))
+    harness = EnterpriseAgentHarness(store=store, fault_injector=FaultInjector(rules))
     approval_token = "APPROVED_BY_USER" if args.approve else None
     try:
         if args.command == "run":
@@ -80,6 +92,7 @@ def main() -> None:
                 args.objective,
                 approval_token=approval_token,
                 failpoint=args.failpoint,
+                scenario=args.scenario,
             )
         else:
             result = harness.resume(
@@ -90,6 +103,17 @@ def main() -> None:
     finally:
         harness.close()
     print_result(result, include_trace=args.trace)
+
+
+def _parse_fault(value: str) -> FaultRule:
+    parts = value.split(":")
+    if len(parts) not in {2, 3}:
+        raise argparse.ArgumentTypeError("fault must be TOOL:MODE[:TIMES]")
+    try:
+        times = int(parts[2]) if len(parts) == 3 else 1
+        return FaultRule(parts[0], parts[1], times=times)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 if __name__ == "__main__":

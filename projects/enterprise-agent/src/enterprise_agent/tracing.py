@@ -33,6 +33,7 @@ class ActiveSpan:
         self.attributes = dict(attributes or {})
         self.started_at = datetime.now(UTC)
         self._started = time.monotonic()
+        self._forced_error_type: str | None = None
 
     def __enter__(self) -> ActiveSpan:
         self.store.start_span(
@@ -53,6 +54,9 @@ class ActiveSpan:
     def set_attribute(self, name: str, value: Any) -> None:
         self.attributes[name] = value
 
+    def mark_error(self, error_type: str) -> None:
+        self._forced_error_type = error_type
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -61,11 +65,11 @@ class ActiveSpan:
     ) -> None:
         self.store.finish_span(
             self.span_id,
-            status=SpanStatus.ERROR if exc_type else SpanStatus.COMPLETED,
+            status=SpanStatus.ERROR if exc_type or self._forced_error_type else SpanStatus.COMPLETED,
             finished_at=datetime.now(UTC).isoformat(),
             duration_ms=(time.monotonic() - self._started) * 1000,
             attributes=self.attributes,
-            error_type=exc_type.__name__ if exc_type else None,
+            error_type=exc_type.__name__ if exc_type else self._forced_error_type,
         )
 
 

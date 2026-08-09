@@ -83,7 +83,7 @@ Python 线程不能被安全强杀。`future.cancel()` 只能取消尚未开始�
 - idempotency key
 - started time
 
-成功调用的聚合信息会进入 Agent Result 和任务 Event Log。完整 `ToolCallRecord` 当前保存在 Runtime 内存中，下一阶段会统一持久化为 Trace Span。
+成功调用的聚合信息会进入 Agent Result 和任务 Event Log。完整 `ToolCallRecord` 同时保存在 Runtime 内存，并通过 Trace sink 持久化为每个 attempt 一个 Span；观测 sink 失败不会改变业务调用结果。
 
 ## 已验证场景
 
@@ -97,3 +97,5 @@ Python 线程不能被安全强杀。`future.cancel()` 只能取消尚未开始�
 - 固定窗口限流
 - 并发饱和快速失败
 - 两个并发 Worker 使用同一幂等键只创建一个工单
+- 注入瞬时和超时故障后重试恢复，并保留失败 attempt Trace
+- 永久数据源故障不重试，并阻断未验证的写操作

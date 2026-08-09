@@ -6,7 +6,7 @@ Harness 控制单次任务如何推进；Agent Infra 提供任务跨进程、跨
 
 ```text
 Agent Layer
-  Knowledge Researcher / Data Analyst / Verifier / Synthesis
+  Metrics Investigator / Log Investigator / Runbook Researcher / Verifier / Synthesis
 
 Runtime Layer
   State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime
@@ -21,10 +21,12 @@ Platform Layer
 flowchart TD
     U["用户任务"] --> R["Durable Task Runtime"]
     R --> S["Supervisor"]
-    S --> K["Knowledge Researcher"]
-    S --> D["Data Analyst"]
-    K --> V["Verifier"]
-    D --> V
+    S --> M["Metrics Investigator"]
+    S --> L["Log Investigator"]
+    S --> K["Runbook Researcher"]
+    M --> V["Verifier"]
+    L --> V
+    K --> V
     V --> Y["Synthesis"]
     Y --> A{"高风险动作?"}
     A -->|否| C["Completed"]
@@ -34,8 +36,9 @@ flowchart TD
 
     R <--> DB["SQLite Snapshot + Event Log + Spans"]
     R <--> CTX["Context Engine"]
-    K --> TG["Tool Runtime"]
-    D --> TG
+    M --> TG["Tool Runtime"]
+    L --> TG
+    K --> TG
     X --> TG
     R --> TR["Runtime Span"]
     TR --> AS["Agent Spans"]
@@ -52,6 +55,7 @@ flowchart TD
 | Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
 | Event Store | Snapshot、事件轨迹、乐观锁 | 判断业务结论 |
 | Trace Recorder | Span 生命周期、父子关系、延迟与错误聚合 | 替代业务事件或完整日志正文 |
+| Fault Injector | 在 provider adapter 边界复现瞬时、永久和超时故障 | 绕过 Gateway 策略 |
 | Retrieval | 召回、融合、重排 | 业务写操作 |
 | Evaluation | 数据集、指标、回归测试、故障注入 | 修改线上行为 |
 | API | 会话、鉴权、流式返回 | Agent 内部推理 |
@@ -86,12 +90,14 @@ Allowlist
 
 ```text
 runtime.run / runtime.resume
-  ├── agent.knowledge_researcher
-  │     └── tool.search_docs
-  ├── agent.data_analyst
-  │     └── tool.query_metrics
+  ├── agent.metrics_investigator
+  │     └── tool.query_service_metrics
+  ├── agent.log_investigator
+  │     └── tool.search_logs
+  ├── agent.runbook_researcher
+  │     └── tool.get_runbook
   ├── agent.verifier
-  ├── agent.synthesis_agent
+  ├── agent.incident_synthesis_agent
   └── agent.action_executor
         └── tool.create_ticket
 ```

@@ -4,7 +4,129 @@ from typing import Any
 
 from .context import ContextSnapshot
 from .models import AgentResult, Evidence, TaskEnvelope, TaskState
-from .tools import ToolRuntime
+from .tools import ToolError, ToolRuntime
+
+
+def _tool_failure(agent_name: str, tool_name: str, error: ToolError) -> AgentResult:
+    return AgentResult(
+        agent_name=agent_name,
+        status="failed",
+        summary=f"{tool_name} 数据源不可用",
+        data={"failed_tool": tool_name, "error_type": type(error).__name__},
+        warnings=[str(error)],
+    )
+
+
+def _incident_service(task: TaskEnvelope) -> str:
+    return "order-api" if "order-api" in task.objective.lower() else "payment-api"
+
+
+class MetricsInvestigator:
+    name = "metrics_investigator"
+
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        runtime: ToolRuntime,
+        trace_parent_id: str | None = None,
+    ) -> AgentResult:
+        service = _incident_service(task)
+        try:
+            result = runtime.invoke(
+                "query_service_metrics",
+                allowed_tools=task.allowed_tools,
+                arguments={"service": service, "window_minutes": 15},
+                task_id=task.task_id,
+                trace_id=task.task_id,
+                parent_span_id=trace_parent_id,
+            )
+        except ToolError as error:
+            return _tool_failure(self.name, "query_service_metrics", error)
+        anomalous = result.data["error_rate"] >= 0.05 or result.data["p95_latency_ms"] >= 1000
+        facts = [
+            f"{service} 15 分钟错误率 {result.data['error_rate']:.1%}，基线 {result.data['baseline_error_rate']:.1%}",
+            f"P95 延迟 {result.data['p95_latency_ms']}ms，连接池利用率 {result.data['db_pool_utilization']:.1%}",
+        ]
+        return AgentResult(
+            self.name,
+            "completed" if anomalous else "failed",
+            "检测到服务黄金信号异常" if anomalous else "未检测到显著指标异常",
+            data={**result.data, "facts": facts, "tool_call": result.metadata, "anomalous": anomalous},
+            evidence=list(result.evidence),
+            warnings=[] if anomalous else ["指标未达到事故阈值"],
+        )
+
+
+class LogInvestigator:
+    name = "log_investigator"
+
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        runtime: ToolRuntime,
+        trace_parent_id: str | None = None,
+    ) -> AgentResult:
+        service = _incident_service(task)
+        try:
+            result = runtime.invoke(
+                "search_logs",
+                allowed_tools=task.allowed_tools,
+                arguments={"service": service, "severity": "error", "limit": 20},
+                task_id=task.task_id,
+                trace_id=task.task_id,
+                parent_span_id=trace_parent_id,
+            )
+        except ToolError as error:
+            return _tool_failure(self.name, "search_logs", error)
+        entries = result.data["entries"]
+        codes = [entry["code"] for entry in entries]
+        facts = [f"{service} 高频错误 {entry['code']} 出现 {entry['count']} 次" for entry in entries]
+        return AgentResult(
+            self.name,
+            "completed" if entries else "failed",
+            "日志显示数据库连接超时与 HTTP 503 同时出现" if entries else "没有匹配的错误日志",
+            data={**result.data, "codes": codes, "facts": facts, "tool_call": result.metadata},
+            evidence=list(result.evidence),
+            warnings=[] if entries else ["日志证据为空"],
+        )
+
+
+class RunbookResearcher:
+    name = "runbook_researcher"
+
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        runtime: ToolRuntime,
+        trace_parent_id: str | None = None,
+    ) -> AgentResult:
+        service = _incident_service(task)
+        try:
+            result = runtime.invoke(
+                "get_runbook",
+                allowed_tools=task.allowed_tools,
+                arguments={"service": service, "symptom": "database_pool_exhaustion"},
+                task_id=task.task_id,
+                trace_id=task.task_id,
+                parent_span_id=trace_parent_id,
+            )
+        except ToolError as error:
+            return _tool_failure(self.name, "get_runbook", error)
+        runbook = result.data["runbook"]
+        return AgentResult(
+            self.name,
+            "completed" if runbook else "failed",
+            "找到已审批的数据库连接池处置手册" if runbook else "没有匹配的处置手册",
+            data={**result.data, "facts": [f"适用 Runbook：{runbook['title']}"] if runbook else [], "tool_call": result.metadata},
+            evidence=list(result.evidence),
+            warnings=[] if runbook else ["不得在缺少 Runbook 时自动执行处置"],
+        )
 
 
 class KnowledgeResearcher:
@@ -152,4 +274,61 @@ class SynthesisAgent:
             evidence=evidence,
             warnings=(researcher.warnings if researcher else []),
             next_action="prepare_ticket" if "工单" in task.objective and not verification_failed else None,
+        )
+
+
+class IncidentSynthesisAgent:
+    name = "incident_synthesis_agent"
+
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        results: list[AgentResult],
+    ) -> AgentResult:
+        metrics = next((result for result in results if result.agent_name == "metrics_investigator"), None)
+        logs = next((result for result in results if result.agent_name == "log_investigator"), None)
+        runbook = next((result for result in results if result.agent_name == "runbook_researcher"), None)
+        verifier = next((result for result in results if result.agent_name == "verifier"), None)
+        evidence = [item for result in results for item in result.evidence]
+        verified = verifier is not None and verifier.status == "completed"
+        correlated = bool(
+            verified
+            and metrics
+            and metrics.data.get("db_pool_utilization", 0) >= 0.90
+            and logs
+            and "DB_POOL_TIMEOUT" in logs.data.get("codes", [])
+            and runbook
+            and runbook.data.get("runbook")
+        )
+        if correlated:
+            service = metrics.data["service"]
+            answer = (
+                f"{service} 当前事故的高置信根因是数据库连接池耗尽：连接池利用率 "
+                f"{metrics.data['db_pool_utilization']:.1%}，错误率 {metrics.data['error_rate']:.1%}，"
+                "日志同时出现 DB_POOL_TIMEOUT 与 HTTP_503。"
+            )
+            recommendation = "按 Runbook 暂停非必要批处理，检查慢查询和最近发布；经值班负责人审批后扩容或回滚。"
+            confidence = "high"
+        else:
+            answer = "运维证据未通过交叉验证，系统不会给出确定性根因或自动处置。"
+            recommendation = "修复失败的数据源或补齐 Metrics、Logs、Runbook 证据后重新诊断。"
+            confidence = "insufficient"
+        state.completed_steps.append("incident_synthesis")
+        state.artifacts["answer"] = answer
+        state.artifacts["recommendation"] = recommendation
+        state.artifacts["root_cause_confidence"] = confidence
+        return AgentResult(
+            self.name,
+            "completed" if correlated else "failed",
+            answer,
+            data={
+                "answer": answer,
+                "recommendation": recommendation,
+                "root_cause_confidence": confidence,
+                "source_count": len(evidence),
+            },
+            evidence=evidence,
+            next_action="prepare_ticket" if correlated and "工单" in task.objective else None,
         )

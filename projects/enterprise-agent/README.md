@@ -16,7 +16,8 @@
 
 当前版本使用确定性 Demo 数据，不依赖外部模型或密钥，已经实现：
 
-- Supervisor 并行调度 Knowledge Researcher 和 Data Analyst
+- Incident Supervisor 并行调度 Metrics、Logs 和 Runbook 三个 Specialist
+- 保留 Knowledge Researcher + Data Analyst 业务分析场景作为对照基线
 - Verifier 在合成答案前检查证据和失败子任务
 - SQLite 持久化 Task Snapshot 和 append-only Event Log
 - 有限状态机约束任务生命周期
@@ -33,18 +34,30 @@
 - 任务、Span 类型和操作名维度输出错误率、P50、P95 延迟
 - Context Engine 保留结构化事实、证据引用和最近事件
 - failpoint 模拟进程在关键故障窗口中断
+- Fault Injector 可确定性模拟 transient、permanent 和 timeout 数据源故障
+- Metrics、Logs、Runbook 证据交叉一致后才输出高置信根因
 
 当前演示任务：
 
-> 分析华东区域本月订单下降原因，并在确认库存问题后生成补货工单。
+> 诊断 payment-api 错误率和延迟突增的根因，并生成故障工单。
 
-下一步会将其替换为 Metrics + Logs + Runbook 的运维故障分析场景，并接入真实 LLM、RAG 和企业数据源。
+Demo 会识别数据库连接池耗尽，给出证据绑定的 Runbook 建议，并在创建工单前停在人工审批点。
 
 ## 快速运行
 
 ```bash
 PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db run
 ```
+
+注入一次瞬时 Metrics 故障，验证重试与 Trace：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent \
+  --db work/fault-demo.db run \
+  --inject-fault query_service_metrics:transient
+```
+
+格式为 `TOOL:MODE[:TIMES]`，mode 支持 `transient`、`permanent`、`timeout`。
 
 默认停在 `needs_approval`，输出包含 `task_id` 和已经固定的 `pending_action`。审批并恢复：
 
@@ -99,6 +112,7 @@ enterprise-agent/
 │   ├── store.py           # SQLite Snapshot、Event Log、乐观锁
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
+│   ├── faults.py          # 确定性工具故障注入
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
 │   ├── agents.py          # Specialist、Verifier、Synthesis
@@ -115,6 +129,7 @@ enterprise-agent/
 - [`docs/durable-runtime.md`](docs/durable-runtime.md)：checkpoint、恢复、审批和幂等语义
 - [`docs/tool-gateway.md`](docs/tool-gateway.md)：可靠工具调用与错误处理语义
 - [`docs/observability.md`](docs/observability.md)：持久化 Trace、Span 层级与延迟指标
+- [`docs/incident-response.md`](docs/incident-response.md)：运维证据链、故障注入与安全处置
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -127,8 +142,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. Metrics、Logs、Runbook 三类运维工具和故障注入适配器。
-2. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
-3. Dense + BM25 + Rerank 检索和真实模型适配器。
-4. Worker lease、取消传播和分布式任务抢占。
-5. OpenTelemetry exporter、跨服务 trace context 和指标后端。
+1. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
+2. Dense + BM25 + Rerank 检索和真实模型适配器。
+3. Worker lease、取消传播和分布式任务抢占。
+4. OpenTelemetry exporter、跨服务 trace context 和指标后端。
+5. Prometheus、Loki/OpenSearch、Runbook Registry 的真实适配器。

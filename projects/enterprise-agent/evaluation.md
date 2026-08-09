@@ -75,6 +75,15 @@
 | G2 | Timeout + Retry |  |  |  |  |
 | G3 | Rate Limit + Circuit Breaker |  |  |  |  |
 
+## Incident Diagnosis 实验
+
+| Run | 故障 | 期望行为 | Root Cause | 写操作 | Trace |
+| --- | --- | --- | --- | --- | --- |
+| I0 | 无注入故障 | 三源交叉验证 | high | 等待审批 | 完整 |
+| I1 | Metrics transient ×1 | Gateway 重试恢复 | high | 等待审批 | 失败+成功 attempt |
+| I2 | Runbook timeout ×1 | 超时后重试恢复 | high | 等待审批 | 失败+成功 attempt |
+| I3 | Logs permanent | Verifier 阻断 | insufficient | 禁止 | 永久错误 span |
+
 ## 失败案例
 
 对每个重要失败记录：输入、期望、实际轨迹、根因、修复和回归测试。
