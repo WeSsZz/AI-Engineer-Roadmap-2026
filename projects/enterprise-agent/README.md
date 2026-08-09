@@ -28,6 +28,9 @@
 - 按瞬时错误、永久错误、超时、权限和容量错误执行不同策略
 - 工具级超时、指数退避重试、并发上限、固定窗口限流和熔断
 - 每次工具尝试记录 call ID、task ID、耗时、错误类型和幂等键
+- Runtime、Agent、Tool 统一持久化为带父子关系的 SQLite Span
+- `run` 与每次 `resume` 分别形成根 Span，进程重启后仍归属于同一 task trace
+- 任务、Span 类型和操作名维度输出错误率、P50、P95 延迟
 - Context Engine 保留结构化事实、证据引用和最近事件
 - failpoint 模拟进程在关键故障窗口中断
 
@@ -55,6 +58,13 @@ PYTHONPATH=src python -m enterprise_agent \
 
 ```bash
 PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db list
+```
+
+查询持久化 Trace 与聚合指标：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent \
+  --db work/enterprise_agent.db trace TASK_ID
 ```
 
 运行测试：
@@ -87,6 +97,7 @@ enterprise-agent/
 │   ├── harness.py         # 分阶段执行循环、resume 和 failpoint
 │   ├── state_machine.py   # 合法状态转换
 │   ├── store.py           # SQLite Snapshot、Event Log、乐观锁
+│   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
@@ -103,6 +114,7 @@ enterprise-agent/
 - [`architecture.md`](architecture.md)：整体模块边界与数据流
 - [`docs/durable-runtime.md`](docs/durable-runtime.md)：checkpoint、恢复、审批和幂等语义
 - [`docs/tool-gateway.md`](docs/tool-gateway.md)：可靠工具调用与错误处理语义
+- [`docs/observability.md`](docs/observability.md)：持久化 Trace、Span 层级与延迟指标
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -115,8 +127,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 将 ToolCallRecord 持久化为统一 Trace Span，并增加任务级 P50/P95 指标。
-2. Metrics、Logs、Runbook 三类运维工具和故障注入适配器。
-3. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
-4. Dense + BM25 + Rerank 检索和真实模型适配器。
-5. Worker lease、取消传播和分布式任务抢占。
+1. Metrics、Logs、Runbook 三类运维工具和故障注入适配器。
+2. Single-Agent、Plan-Executor、Multi-Agent 对比评测集。
+3. Dense + BM25 + Rerank 检索和真实模型适配器。
+4. Worker lease、取消传播和分布式任务抢占。
+5. OpenTelemetry exporter、跨服务 trace context 和指标后端。

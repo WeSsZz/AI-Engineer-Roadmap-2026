@@ -7,10 +7,11 @@ from typing import Any
 
 from .agents import DataAnalyst, KnowledgeResearcher, SynthesisAgent, Verifier
 from .context import ContextEngine
-from .models import AgentResult, Budget, Event, TaskEnvelope, TaskState, TaskStatus
+from .models import AgentResult, Budget, Event, SpanKind, TaskEnvelope, TaskState, TaskStatus
 from .state_machine import TERMINAL_STATUSES, transition
 from .store import ConcurrentCheckpointError, SQLiteEventStore, StoredExecution
 from .tools import ToolRuntime, build_demo_runtime
+from .tracing import SQLiteTraceRecorder
 
 
 class SimulatedInterruption(RuntimeError):
@@ -48,8 +49,11 @@ class EnterpriseAgentHarness:
         store: SQLiteEventStore | None = None,
     ):
         self.store = store or SQLiteEventStore()
+        self.tracer = SQLiteTraceRecorder(self.store)
         self._owns_runtime = runtime is None
-        self.runtime = runtime or build_demo_runtime(self.store.path)
+        self.runtime = runtime or build_demo_runtime(self.store.path, self.tracer.record_tool_call)
+        if runtime is not None:
+            self.runtime.set_record_sink(self.tracer.record_tool_call)
         self.context_engine = context_engine or ContextEngine(max_context_chars=12_000)
         self.researcher = KnowledgeResearcher()
         self.analyst = DataAnalyst()
@@ -88,7 +92,21 @@ class EnterpriseAgentHarness:
         execution = StoredExecution(task=task, state=TaskState(task_id=task.task_id), agent_results=[], events=[])
         self._emit(execution, "task_created", "supervisor", {"objective": objective, "risk_level": task.risk_level})
         self.store.create(execution)
-        return self._execute(execution, approval_token=approval_token, failpoint=failpoint)
+        with self.tracer.start_span(
+            trace_id=task.task_id,
+            task_id=task.task_id,
+            name="runtime.run",
+            kind=SpanKind.RUNTIME,
+            attributes={"initial_status": execution.state.status.value},
+        ) as span:
+            result = self._execute(
+                execution,
+                approval_token=approval_token,
+                failpoint=failpoint,
+                parent_span_id=span.span_id,
+            )
+            span.set_attribute("final_status", result.state.status.value)
+            return result
 
     def resume(
         self,
@@ -107,7 +125,21 @@ class EnterpriseAgentHarness:
             {"status": execution.state.status.value, "checkpoint_version": execution.state.version},
         )
         self._checkpoint(execution)
-        return self._execute(execution, approval_token=approval_token, failpoint=failpoint)
+        with self.tracer.start_span(
+            trace_id=task_id,
+            task_id=task_id,
+            name="runtime.resume",
+            kind=SpanKind.RUNTIME,
+            attributes={"initial_status": execution.state.status.value},
+        ) as span:
+            result = self._execute(
+                execution,
+                approval_token=approval_token,
+                failpoint=failpoint,
+                parent_span_id=span.span_id,
+            )
+            span.set_attribute("final_status", result.state.status.value)
+            return result
 
     def get_task(self, task_id: str) -> TaskRunResult:
         return self._result(self.store.load(task_id))
@@ -118,6 +150,7 @@ class EnterpriseAgentHarness:
         *,
         approval_token: str | None,
         failpoint: str | None,
+        parent_span_id: str,
     ) -> TaskRunResult:
         try:
             while execution.state.status not in TERMINAL_STATUSES:
@@ -136,7 +169,7 @@ class EnterpriseAgentHarness:
                     continue
 
                 if status == TaskStatus.RUNNING_SPECIALISTS:
-                    self._run_specialists(execution)
+                    self._run_specialists(execution, parent_span_id)
                     transition(execution.state, TaskStatus.VERIFYING)
                     self._emit(
                         execution,
@@ -155,7 +188,8 @@ class EnterpriseAgentHarness:
                         for result in execution.agent_results
                         if result.agent_name in {self.researcher.name, self.analyst.name}
                     ]
-                    verify = self.verifier.run(execution.task, execution.state, context, specialists)
+                    with self._agent_span(execution, self.verifier.name, parent_span_id):
+                        verify = self.verifier.run(execution.task, execution.state, context, specialists)
                     execution.agent_results.append(verify)
                     self._emit(
                         execution,
@@ -176,12 +210,13 @@ class EnterpriseAgentHarness:
 
                 if status == TaskStatus.SYNTHESIZING:
                     context = self.context_engine.build(execution.task, execution.state, execution.events)
-                    synthesis = self.synthesis.run(
-                        execution.task,
-                        execution.state,
-                        context,
-                        execution.agent_results,
-                    )
+                    with self._agent_span(execution, self.synthesis.name, parent_span_id):
+                        synthesis = self.synthesis.run(
+                            execution.task,
+                            execution.state,
+                            context,
+                            execution.agent_results,
+                        )
                     execution.agent_results.append(synthesis)
                     self._emit(
                         execution,
@@ -233,7 +268,7 @@ class EnterpriseAgentHarness:
                     continue
 
                 if status == TaskStatus.EXECUTING_ACTION:
-                    self._execute_action(execution)
+                    self._execute_action(execution, parent_span_id)
                     self._interrupt_if_requested(execution, failpoint, "after_action_before_checkpoint")
                     transition(execution.state, TaskStatus.COMPLETED)
                     self._emit(
@@ -263,7 +298,7 @@ class EnterpriseAgentHarness:
             self._checkpoint(execution)
         return self._result(execution)
 
-    def _run_specialists(self, execution: StoredExecution) -> None:
+    def _run_specialists(self, execution: StoredExecution, parent_span_id: str) -> None:
         context = self.context_engine.build(execution.task, execution.state, execution.events)
         self._emit(
             execution,
@@ -271,10 +306,14 @@ class EnterpriseAgentHarness:
             "supervisor",
             {"agents": [self.researcher.name, self.analyst.name]},
         )
+        def run_specialist(agent: KnowledgeResearcher | DataAnalyst) -> AgentResult:
+            with self._agent_span(execution, agent.name, parent_span_id) as span:
+                return agent.run(execution.task, execution.state, context, self.runtime, span.span_id)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = [
-                pool.submit(self.researcher.run, execution.task, execution.state, context, self.runtime),
-                pool.submit(self.analyst.run, execution.task, execution.state, context, self.runtime),
+                pool.submit(run_specialist, self.researcher),
+                pool.submit(run_specialist, self.analyst),
             ]
             results = [future.result() for future in futures]
         for result in results:
@@ -291,21 +330,24 @@ class EnterpriseAgentHarness:
                 {"status": result.status, "summary": result.summary, "tool_call": result.data.get("tool_call")},
             )
 
-    def _execute_action(self, execution: StoredExecution) -> None:
+    def _execute_action(self, execution: StoredExecution, parent_span_id: str) -> None:
         approval = execution.state.artifacts.get("approval", {})
         pending_action = execution.state.artifacts.get("pending_action", {})
         if approval.get("approved") is not True or approval.get("action_id") != pending_action.get("action_id"):
             raise PermissionError("Persisted human approval is required before a write action")
-        ticket_output = self.runtime.invoke(
-            pending_action["tool_name"],
-            allowed_tools=execution.task.allowed_tools,
-            arguments={
-                **pending_action["arguments"],
-                "approval_token": "APPROVED_BY_USER",
-                "idempotency_key": pending_action["action_id"],
-            },
-            task_id=execution.task.task_id,
-        )
+        with self._agent_span(execution, "action_executor", parent_span_id) as span:
+            ticket_output = self.runtime.invoke(
+                pending_action["tool_name"],
+                allowed_tools=execution.task.allowed_tools,
+                arguments={
+                    **pending_action["arguments"],
+                    "approval_token": "APPROVED_BY_USER",
+                    "idempotency_key": pending_action["action_id"],
+                },
+                task_id=execution.task.task_id,
+                trace_id=execution.task.task_id,
+                parent_span_id=span.span_id,
+            )
         if ticket_output.status != "completed":
             raise RuntimeError(f"Action executor returned unexpected status: {ticket_output.status}")
         execution.state.artifacts["ticket"] = ticket_output.data
@@ -318,6 +360,15 @@ class EnterpriseAgentHarness:
 
     def _checkpoint(self, execution: StoredExecution) -> None:
         self.store.checkpoint(execution)
+
+    def _agent_span(self, execution: StoredExecution, agent_name: str, parent_span_id: str):
+        return self.tracer.start_span(
+            trace_id=execution.task.task_id,
+            task_id=execution.task.task_id,
+            parent_span_id=parent_span_id,
+            name=f"agent.{agent_name}",
+            kind=SpanKind.AGENT,
+        )
 
     @staticmethod
     def _emit(execution: StoredExecution, event_type: str, actor: str, payload: dict[str, Any]) -> None:

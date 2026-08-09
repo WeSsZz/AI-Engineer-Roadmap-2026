@@ -6,7 +6,18 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .models import AgentResult, Budget, Event, Evidence, TaskEnvelope, TaskState, TaskStatus
+from .models import (
+    AgentResult,
+    Budget,
+    Event,
+    Evidence,
+    SpanKind,
+    SpanStatus,
+    TaskEnvelope,
+    TaskState,
+    TaskStatus,
+    TraceSpan,
+)
 
 
 class TaskNotFoundError(KeyError):
@@ -70,8 +81,161 @@ class SQLiteEventStore:
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
                 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, sequence);
+
+                CREATE TABLE IF NOT EXISTS spans (
+                    span_id TEXT PRIMARY KEY,
+                    trace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    parent_span_id TEXT,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    duration_ms REAL,
+                    attributes_json TEXT NOT NULL,
+                    error_type TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_spans_task_started ON spans(task_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_spans_trace ON spans(trace_id);
+                CREATE INDEX IF NOT EXISTS idx_spans_parent ON spans(parent_span_id);
+                CREATE INDEX IF NOT EXISTS idx_spans_name ON spans(name);
                 """
             )
+
+    def start_span(self, span: TraceSpan) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO spans(
+                    span_id, trace_id, task_id, parent_span_id, name, kind, status,
+                    started_at, finished_at, duration_ms, attributes_json, error_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._span_values(span),
+            )
+
+    def finish_span(
+        self,
+        span_id: str,
+        *,
+        status: SpanStatus,
+        finished_at: str,
+        duration_ms: float,
+        attributes: dict[str, Any],
+        error_type: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE spans
+                SET status = ?, finished_at = ?, duration_ms = ?, attributes_json = ?, error_type = ?
+                WHERE span_id = ?
+                """,
+                (
+                    status.value,
+                    finished_at,
+                    duration_ms,
+                    json.dumps(attributes, ensure_ascii=False, sort_keys=True),
+                    error_type,
+                    span_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown span: {span_id}")
+
+    def record_span(self, span: TraceSpan) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO spans(
+                    span_id, trace_id, task_id, parent_span_id, name, kind, status,
+                    started_at, finished_at, duration_ms, attributes_json, error_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._span_values(span),
+            )
+
+    def list_spans(self, task_id: str) -> list[TraceSpan]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM spans WHERE task_id = ? ORDER BY started_at, span_id",
+                (task_id,),
+            ).fetchall()
+        return [self._decode_span(row) for row in rows]
+
+    def trace_summary(self, task_id: str) -> dict[str, Any]:
+        spans = self.list_spans(task_id)
+        completed = [span for span in spans if span.duration_ms is not None]
+
+        def aggregate(items: list[TraceSpan]) -> dict[str, Any]:
+            durations = sorted(span.duration_ms for span in items if span.duration_ms is not None)
+            errors = sum(span.status == SpanStatus.ERROR for span in items)
+            return {
+                "count": len(items),
+                "error_count": errors,
+                "error_rate": round(errors / len(items), 4) if items else 0.0,
+                "p50_ms": self._percentile(durations, 0.50),
+                "p95_ms": self._percentile(durations, 0.95),
+            }
+
+        by_kind = {
+            kind.value: aggregate([span for span in completed if span.kind == kind])
+            for kind in SpanKind
+            if any(span.kind == kind for span in completed)
+        }
+        names = sorted({span.name for span in completed})
+        return {
+            "task_id": task_id,
+            "span_count": len(spans),
+            "running_count": sum(span.status == SpanStatus.RUNNING for span in spans),
+            "overall": aggregate(completed),
+            "by_kind": by_kind,
+            "by_name": {name: aggregate([span for span in completed if span.name == name]) for name in names},
+        }
+
+    @staticmethod
+    def _percentile(values: list[float], percentile: float) -> float | None:
+        if not values:
+            return None
+        # Nearest-rank is deterministic and keeps the metric dependency-free.
+        rank = max(1, int(len(values) * percentile + 0.999999999))
+        return round(values[min(rank, len(values)) - 1], 3)
+
+    @staticmethod
+    def _span_values(span: TraceSpan) -> tuple[Any, ...]:
+        return (
+            span.span_id,
+            span.trace_id,
+            span.task_id,
+            span.parent_span_id,
+            span.name,
+            span.kind.value,
+            span.status.value,
+            span.started_at,
+            span.finished_at,
+            span.duration_ms,
+            json.dumps(span.attributes, ensure_ascii=False, sort_keys=True),
+            span.error_type,
+        )
+
+    @staticmethod
+    def _decode_span(row: sqlite3.Row) -> TraceSpan:
+        return TraceSpan(
+            span_id=row["span_id"],
+            trace_id=row["trace_id"],
+            task_id=row["task_id"],
+            parent_span_id=row["parent_span_id"],
+            name=row["name"],
+            kind=SpanKind(row["kind"]),
+            status=SpanStatus(row["status"]),
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+            duration_ms=row["duration_ms"],
+            attributes=json.loads(row["attributes_json"]),
+            error_type=row["error_type"],
+        )
 
     def create(self, execution: StoredExecution) -> None:
         snapshot = self._encode_snapshot(execution)

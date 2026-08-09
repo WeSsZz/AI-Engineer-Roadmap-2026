@@ -11,8 +11,8 @@ Agent Layer
 Runtime Layer
   State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime
 
-Planned Platform Layer
-  API / Scheduler / Trace / Evaluation / Fault Injection
+Platform Layer
+  Persistent Trace / API (planned) / Scheduler (planned) / Evaluation
 ```
 
 ## 当前数据流
@@ -32,11 +32,14 @@ flowchart TD
     H --> X["Action Executor"]
     X --> C
 
-    R <--> DB["SQLite Snapshot + Event Log"]
+    R <--> DB["SQLite Snapshot + Event Log + Spans"]
     R <--> CTX["Context Engine"]
     K --> TG["Tool Runtime"]
     D --> TG
     X --> TG
+    R --> TR["Runtime Span"]
+    TR --> AS["Agent Spans"]
+    AS --> TS["Tool Attempt Spans"]
 ```
 
 ## 模块边界
@@ -48,6 +51,7 @@ flowchart TD
 | Context | 模型可见上下文、压缩视图、token 预算 | 删除原始事件 |
 | Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
 | Event Store | Snapshot、事件轨迹、乐观锁 | 判断业务结论 |
+| Trace Recorder | Span 生命周期、父子关系、延迟与错误聚合 | 替代业务事件或完整日志正文 |
 | Retrieval | 召回、融合、重排 | 业务写操作 |
 | Evaluation | 数据集、指标、回归测试、故障注入 | 修改线上行为 |
 | API | 会话、鉴权、流式返回 | Agent 内部推理 |
@@ -77,6 +81,22 @@ Allowlist
 ```
 
 瞬时错误和超时允许按策略重试；永久错误、权限错误、参数错误和容量拒绝不会盲目重试。详细语义见 [`docs/tool-gateway.md`](docs/tool-gateway.md)。
+
+## Trace 层级
+
+```text
+runtime.run / runtime.resume
+  ├── agent.knowledge_researcher
+  │     └── tool.search_docs
+  ├── agent.data_analyst
+  │     └── tool.query_metrics
+  ├── agent.verifier
+  ├── agent.synthesis_agent
+  └── agent.action_executor
+        └── tool.create_ticket
+```
+
+每个 Tool 重试 attempt 都是独立 Span，因此能区分“最终成功”与“前序尝试失败”。硬进程退出可能留下 `running` Span，查询汇总会单独报告，而不会将其伪装为成功。详细语义见 [`docs/observability.md`](docs/observability.md)。
 
 ## 规划中的检索链路
 

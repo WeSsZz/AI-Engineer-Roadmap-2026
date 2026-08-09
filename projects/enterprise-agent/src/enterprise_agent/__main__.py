@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--failpoint")
 
     subparsers.add_parser("list", help="List persisted tasks")
+    trace_parser = subparsers.add_parser("trace", help="Show persisted spans and latency metrics")
+    trace_parser.add_argument("task_id")
     return parser
 
 
@@ -52,6 +54,22 @@ def main() -> None:
     store = SQLiteEventStore(args.db)
     if args.command == "list":
         print(json.dumps(store.list_tasks(), ensure_ascii=False, indent=2))
+        return
+    if args.command == "trace":
+        spans = store.list_spans(args.task_id)
+        payload = {
+            "task_id": args.task_id,
+            "summary": store.trace_summary(args.task_id),
+            "spans": [
+                {
+                    **span.__dict__,
+                    "kind": span.kind.value,
+                    "status": span.status.value,
+                }
+                for span in spans
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
     harness = EnterpriseAgentHarness(store=store)

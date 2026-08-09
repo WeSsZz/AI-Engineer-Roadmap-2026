@@ -3,14 +3,17 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .models import Evidence
-from .tool_gateway import ArgumentSpec, ToolError, ToolOutput, ToolPolicy, ToolRuntime, ToolSpec
+from .tool_gateway import ArgumentSpec, ToolCallRecord, ToolError, ToolOutput, ToolPolicy, ToolRuntime, ToolSpec
 
 
-def build_demo_runtime(database_path: str | Path | None = None) -> ToolRuntime:
-    runtime = ToolRuntime()
+def build_demo_runtime(
+    database_path: str | Path | None = None,
+    record_sink: Callable[[ToolCallRecord], None] | None = None,
+) -> ToolRuntime:
+    runtime = ToolRuntime(record_sink=record_sink)
     ticket_database = Path(database_path) if database_path is not None else None
     in_memory_tickets: dict[str, dict[str, Any]] = {}
     if ticket_database is not None:

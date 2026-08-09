@@ -36,6 +36,8 @@
 - P50 / P95 延迟
 - 每请求 token 或估算成本
 - 错误率
+- Trace 完整率：具有 Runtime→Agent→Tool 可达父链的 Span 比例
+- 孤儿/未结束 Span 数量：发现进程硬退出和埋点缺口
 
 ### Tool Gateway
 

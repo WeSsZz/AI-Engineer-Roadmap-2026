@@ -22,6 +22,18 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class SpanKind(str, Enum):
+    RUNTIME = "runtime"
+    AGENT = "agent"
+    TOOL = "tool"
+
+
+class SpanStatus(str, Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+
 @dataclass(frozen=True)
 class Budget:
     max_steps: int = 8
@@ -68,6 +80,22 @@ class Event:
     actor: str
     payload: dict[str, Any]
     occurred_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+@dataclass(frozen=True)
+class TraceSpan:
+    span_id: str
+    trace_id: str
+    task_id: str
+    parent_span_id: str | None
+    name: str
+    kind: SpanKind
+    status: SpanStatus
+    started_at: str
+    finished_at: str | None = None
+    duration_ms: float | None = None
+    attributes: dict[str, Any] = field(default_factory=dict)
+    error_type: str | None = None
 
 
 @dataclass

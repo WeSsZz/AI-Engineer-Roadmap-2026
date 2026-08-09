@@ -10,12 +10,21 @@ from .tools import ToolRuntime
 class KnowledgeResearcher:
     name = "knowledge_researcher"
 
-    def run(self, task: TaskEnvelope, state: TaskState, context: ContextSnapshot, runtime: ToolRuntime) -> AgentResult:
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        runtime: ToolRuntime,
+        trace_parent_id: str | None = None,
+    ) -> AgentResult:
         result = runtime.invoke(
             "search_docs",
             allowed_tools=task.allowed_tools,
             arguments={"query": task.objective},
             task_id=task.task_id,
+            trace_id=task.task_id,
+            parent_span_id=trace_parent_id,
         )
         return AgentResult(
             agent_name=self.name,
@@ -30,13 +39,22 @@ class KnowledgeResearcher:
 class DataAnalyst:
     name = "data_analyst"
 
-    def run(self, task: TaskEnvelope, state: TaskState, context: ContextSnapshot, runtime: ToolRuntime) -> AgentResult:
+    def run(
+        self,
+        task: TaskEnvelope,
+        state: TaskState,
+        context: ContextSnapshot,
+        runtime: ToolRuntime,
+        trace_parent_id: str | None = None,
+    ) -> AgentResult:
         region = "华东" if "华东" in task.objective else "华南" if "华南" in task.objective else "华东"
         result = runtime.invoke(
             "query_metrics",
             allowed_tools=task.allowed_tools,
             arguments={"region": region},
             task_id=task.task_id,
+            trace_id=task.task_id,
+            parent_span_id=trace_parent_id,
         )
         rows = result.data["rows"]
         if len(rows) < 2:

@@ -103,6 +103,8 @@ class ToolCallRecord:
     error_type: str | None
     idempotency_key: str | None
     started_at: str
+    trace_id: str | None = None
+    parent_span_id: str | None = None
 
 
 @dataclass
@@ -129,11 +131,14 @@ class ToolRuntime:
         max_workers: int = 16,
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
+        record_sink: Callable[[ToolCallRecord], None] | None = None,
     ) -> None:
         self._tools: dict[str, ToolSpec] = {}
         self._states: dict[str, _ToolState] = {}
         self._records: list[ToolCallRecord] = []
         self._records_lock = threading.Lock()
+        self._record_sink = record_sink
+        self._sink_errors: list[str] = []
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="tool-gateway")
         self._monotonic = monotonic
         self._sleeper = sleeper
@@ -142,6 +147,14 @@ class ToolRuntime:
     def invocations(self) -> tuple[ToolCallRecord, ...]:
         with self._records_lock:
             return tuple(self._records)
+
+    @property
+    def sink_errors(self) -> tuple[str, ...]:
+        with self._records_lock:
+            return tuple(self._sink_errors)
+
+    def set_record_sink(self, sink: Callable[[ToolCallRecord], None] | None) -> None:
+        self._record_sink = sink
 
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
@@ -170,17 +183,19 @@ class ToolRuntime:
         allowed_tools: tuple[str, ...],
         arguments: dict[str, Any],
         task_id: str | None = None,
+        trace_id: str | None = None,
+        parent_span_id: str | None = None,
     ) -> ToolOutput:
         call_id = f"call-{uuid.uuid4().hex[:12]}"
         request_started = self._monotonic()
         if name not in allowed_tools:
             error = ToolPermissionError(f"Tool '{name}' is not allowed for this task")
-            self._record_rejection(call_id, task_id, name, arguments, error)
+            self._record_rejection(call_id, task_id, name, arguments, error, trace_id, parent_span_id)
             raise error
         spec = self._tools.get(name)
         if spec is None:
             error = ToolValidationError(f"Unknown tool '{name}'")
-            self._record_rejection(call_id, task_id, name, arguments, error)
+            self._record_rejection(call_id, task_id, name, arguments, error, trace_id, parent_span_id)
             raise error
 
         try:
@@ -189,13 +204,13 @@ class ToolRuntime:
             state = self._states[name]
             self._consume_rate_limit(spec, state)
         except ToolError as error:
-            self._record_rejection(call_id, task_id, name, arguments, error)
+            self._record_rejection(call_id, task_id, name, arguments, error, trace_id, parent_span_id)
             raise
 
         try:
             self._before_circuit(spec, state)
         except ToolError as error:
-            self._record_rejection(call_id, task_id, name, arguments, error)
+            self._record_rejection(call_id, task_id, name, arguments, error, trace_id, parent_span_id)
             raise
 
         attempts = spec.policy.max_retries + 1
@@ -230,6 +245,8 @@ class ToolRuntime:
                         error_type=None,
                         idempotency_key=arguments.get("idempotency_key"),
                         started_at=started_at,
+                        trace_id=trace_id,
+                        parent_span_id=parent_span_id,
                     )
                 )
                 self._on_success(state)
@@ -264,6 +281,8 @@ class ToolRuntime:
                     error_type=type(error).__name__,
                     idempotency_key=arguments.get("idempotency_key"),
                     started_at=started_at,
+                    trace_id=trace_id,
+                    parent_span_id=parent_span_id,
                 )
             )
             retryable = isinstance(error, (ToolTransientError, ToolTimeoutError))
@@ -362,6 +381,8 @@ class ToolRuntime:
         tool_name: str,
         arguments: dict[str, Any],
         error: ToolError,
+        trace_id: str | None,
+        parent_span_id: str | None,
     ) -> None:
         self._append_record(
             ToolCallRecord(
@@ -374,9 +395,18 @@ class ToolRuntime:
                 error_type=type(error).__name__,
                 idempotency_key=arguments.get("idempotency_key"),
                 started_at=datetime.now(UTC).isoformat(),
+                trace_id=trace_id,
+                parent_span_id=parent_span_id,
             )
         )
 
     def _append_record(self, record: ToolCallRecord) -> None:
         with self._records_lock:
             self._records.append(record)
+        if self._record_sink is not None:
+            try:
+                self._record_sink(record)
+            except Exception as exc:
+                # Telemetry must not turn a successful business call into a failure.
+                with self._records_lock:
+                    self._sink_errors.append(f"{type(exc).__name__}: {exc}")
