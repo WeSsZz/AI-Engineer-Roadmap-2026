@@ -144,11 +144,18 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 - 稳定 JSONL trajectory schema；
 - reward/evaluator hook 与 policy registry；
 - 导出数据脱敏和 retention policy；
-- 可选 Coding Repair Environment 作为第二环境，复用 Runtime 与 Eval 合同。
+- 为独立 `coding-agent-rl-lab` 提供可选 adapter，只共享 Task、Trajectory、Reward 和 PolicyManifest 合同；
+- Coding Environment、Verifier、rollout 和训练循环不进入本仓库。
 
 验收：外部训练/优化系统无需修改 Runtime 核心即可消费轨迹并回灌一个新策略版本。
 
-## 7. 项目完成标准
+## 7. 双项目边界
+
+本仓库只解决生产 Agent 的可靠执行与评测。Agentic RL 作为独立项目 `coding-agent-rl-lab` 维护，负责 Coding Task、sandbox、executable verifier、rollout、reward 和策略优化。
+
+两者未来只通过版本化 JSON 合同可选对接，不能产生运行时依赖，也不共享业务实现。这样可以分别验证系统工程能力与学习闭环，避免运维合成数据和训练逻辑污染 Durable Runtime 的产品边界。
+
+## 8. 项目完成标准
 
 满足以下条件后停止加功能，转向发布、求职和开源协作：
 
@@ -160,7 +167,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 - Docker Compose 可复现，Trace 能解释失败与策略版本；
 - README 中的每个效果数字都能追溯到提交的报告。
 
-## 8. 当前下一步
+## 9. 当前下一步
 
 按优先级执行：
 

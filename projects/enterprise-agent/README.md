@@ -240,3 +240,5 @@ enterprise-agent/
 5. 导出稳定 trajectory schema 与 evaluator hooks，但不在本项目实现 RL Trainer。
 
 完整升级边界、里程碑与停止条件见 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)。
+
+Agentic RL 已拆分为独立的 `coding-agent-rl-lab` 项目。本仓库只保留可选的 trajectory/policy adapter，不包含 Coding Environment 或训练循环。
