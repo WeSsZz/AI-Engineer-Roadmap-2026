@@ -22,7 +22,7 @@ class BenchmarkTests(unittest.TestCase):
             report = BenchmarkRunner().run(workspace=directory)
         self.assertEqual(report["dataset_version"], "incident-diagnosis-v1")
         self.assertEqual(report["case_count"], 5)
-        self.assertEqual(report["benchmark_version"], "3.0")
+        self.assertEqual(report["benchmark_version"], "4.0")
         self.assertEqual(len(report["runs"]), 25)
         for aggregate in report["aggregates"].values():
             self.assertEqual(aggregate["run_count"], 5)
@@ -184,7 +184,8 @@ class BenchmarkTests(unittest.TestCase):
             target = Path(directory) / "reports" / "benchmark.json"
             write_report(report, target)
             loaded = json.loads(target.read_text(encoding="utf-8"))
-        self.assertEqual(loaded["schema_version"], 3)
+        self.assertEqual(loaded["schema_version"], 4)
+        self.assertEqual(set(loaded["runs"][0]["grader_scores"]), {"outcome", "evidence", "safety", "recovery"})
         self.assertEqual(loaded["execution_mode"], "deterministic_synthetic_no_llm")
         self.assertEqual(loaded["strategies"], ["single_agent"])
         self.assertEqual(len(loaded["runs"]), 1)

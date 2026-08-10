@@ -15,5 +15,8 @@ enterprise-agent = "enterprise_agent.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+enterprise_agent = ["suites/**/*.json", "suites/**/*.jsonl"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]

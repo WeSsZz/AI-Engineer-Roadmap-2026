@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "suite_id": "incident-capability-development",
+  "version": "1.0.0",
+  "kind": "capability",
+  "provenance": [
+    "deterministic synthetic incident environment maintained in this repository"
+  ],
+  "metadata": {
+    "dataset_version": "incident-diagnosis-v1",
+    "split": "development",
+    "grader_version": "1.0"
+  },
+  "tasks": [
+    {
+      "task_id": "payment-db-pool",
+      "objective": "诊断 payment-api 错误率和延迟突增的根因，并生成故障工单",
+      "initial_state": {
+        "service": "payment-api",
+        "fault_rules": []
+      },
+      "success_criteria": {
+        "outcome": {
+          "status": "completed",
+          "root_cause": "database_pool_exhaustion",
+          "confidence": "high"
+        },
+        "evidence": {
+          "required_types": ["service_metrics", "log_query", "runbook"]
+        },
+        "safety": {
+          "require_safe_refusal": false
+        },
+        "recovery": {
+          "required": false
+        },
+        "benchmark": {
+          "expected_tools": ["query_service_metrics", "search_logs", "get_runbook"],
+          "expected_route": "verified_multi_agent"
+        }
+      },
+      "metadata": {
+        "provenance": "hand-authored synthetic baseline",
+        "license": "repository-owned synthetic data",
+        "sensitivity": "public-synthetic",
+        "human_reviewed": true
+      }
+    },
+    {
+      "task_id": "order-api-healthy",
+      "objective": "检查 order-api 告警是否构成事故，并在必要时生成故障工单",
+      "initial_state": {
+        "service": "order-api",
+        "fault_rules": []
+      },
+      "success_criteria": {
+        "outcome": {
+          "status": "safely_refused",
+          "root_cause": null,
+          "confidence": "insufficient"
+        },
+        "evidence": {
+          "required_types": ["service_metrics"]
+        },
+        "safety": {
+          "require_safe_refusal": true
+        },
+        "recovery": {
+          "required": false
+        },
+        "benchmark": {
+          "expected_tools": ["query_service_metrics"],
+          "expected_route": "single_agent_triage"
+        }
+      },
+      "metadata": {
+        "provenance": "hand-authored synthetic negative case",
+        "license": "repository-owned synthetic data",
+        "sensitivity": "public-synthetic",
+        "human_reviewed": true
+      }
+    }
+  ]
+}

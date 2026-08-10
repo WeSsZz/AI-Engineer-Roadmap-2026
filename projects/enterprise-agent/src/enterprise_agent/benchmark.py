@@ -20,19 +20,22 @@ from .agents import (
     IncidentSynthesisAgent,
 )
 from .context import ContextEngine
-from .evals import reliability_summary
+from .evals import EvalOutcome, EvalTask, Transcript, reliability_summary
 from .faults import FaultInjector, FaultRule
+from .graders import grade_evaluation
 from .harness import EnterpriseAgentHarness
 from .llm import DeepSeekProvider, LLMCallRecord, LLMConfig, LLMProvider
 from .models import AgentResult, Evidence, SpanKind, TaskEnvelope, TaskState
 from .routing import IncidentRiskRouter
 from .store import SQLiteEventStore
+from .suite_loader import load_evaluation_suites
 from .tool_gateway import ToolError, ToolOutput, ToolRuntime
 from .tools import build_demo_runtime
 from .tracing import SQLiteTraceRecorder
 
 
 DATASET_VERSION = "incident-diagnosis-v1"
+DEFAULT_SUITE_ROOT = Path(__file__).with_name("suites")
 INCIDENT_TOOLS = ("query_service_metrics", "search_logs", "get_runbook", "create_ticket")
 PRICING_SOURCE = "https://api-docs.deepseek.com/quick_start/pricing"
 
@@ -143,6 +146,11 @@ class BenchmarkCase:
     fault_rules: tuple[FaultRule, ...] = ()
     recoverable_fault: bool = False
     expected_route: str | None = None
+    suite_id: str | None = None
+    suite_kind: str | None = None
+    provenance: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+    success_criteria: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -183,59 +191,132 @@ class BenchmarkStrategy(Protocol):
 
 
 def default_cases() -> tuple[BenchmarkCase, ...]:
-    payment_objective = "诊断 payment-api 错误率和延迟突增的根因，并生成故障工单"
-    return (
-        BenchmarkCase(
-            "payment-db-pool",
-            payment_objective,
-            "payment-api",
-            "database_pool_exhaustion",
-            ("service_metrics", "log_query", "runbook"),
-            ("query_service_metrics", "search_logs", "get_runbook"),
-            expected_route="verified_multi_agent",
-        ),
-        BenchmarkCase(
-            "payment-metrics-transient",
-            payment_objective,
-            "payment-api",
-            "database_pool_exhaustion",
-            ("service_metrics", "log_query", "runbook"),
-            ("query_service_metrics", "search_logs", "get_runbook"),
-            (FaultRule("query_service_metrics", "transient"),),
-            True,
-            "verified_multi_agent",
-        ),
-        BenchmarkCase(
-            "payment-runbook-timeout",
-            payment_objective,
-            "payment-api",
-            "database_pool_exhaustion",
-            ("service_metrics", "log_query", "runbook"),
-            ("query_service_metrics", "search_logs", "get_runbook"),
-            (FaultRule("get_runbook", "timeout", delay_seconds=0.08),),
-            True,
-            "verified_multi_agent",
-        ),
-        BenchmarkCase(
-            "payment-logs-permanent",
-            payment_objective,
-            "payment-api",
-            None,
-            ("service_metrics",),
-            ("query_service_metrics", "search_logs"),
-            (FaultRule("search_logs", "permanent"),),
-            expected_route="verified_multi_agent",
-        ),
-        BenchmarkCase(
-            "order-api-healthy",
-            "检查 order-api 告警是否构成事故，并在必要时生成故障工单",
-            "order-api",
-            None,
-            ("service_metrics",),
-            ("query_service_metrics",),
-            expected_route="single_agent_triage",
-        ),
+    cases = load_benchmark_cases(DEFAULT_SUITE_ROOT / "development") + load_benchmark_cases(
+        DEFAULT_SUITE_ROOT / "regression"
     )
+    task_ids = [case.case_id for case in cases]
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("default benchmark suites contain duplicate task ids")
+    versions = {case.metadata.get("dataset_version") for case in cases}
+    if versions != {DATASET_VERSION}:
+        raise ValueError(
+            f"default suites must all declare dataset_version={DATASET_VERSION!r}; got {sorted(versions, key=str)}"
+        )
+    preferred_order = {
+        case_id: index
+        for index, case_id in enumerate(
+            (
+                "payment-db-pool",
+                "payment-metrics-transient",
+                "payment-runbook-timeout",
+                "payment-logs-permanent",
+                "order-api-healthy",
+            )
+        )
+    }
+    return tuple(sorted(cases, key=lambda case: preferred_order.get(case.case_id, len(preferred_order))))
+
+
+def load_benchmark_cases(path: str | Path) -> tuple[BenchmarkCase, ...]:
+    suites = load_evaluation_suites(path)
+    dataset_versions = {suite.metadata.get("dataset_version") for suite in suites}
+    if (
+        len(dataset_versions) != 1
+        or not isinstance(next(iter(dataset_versions)), str)
+        or not next(iter(dataset_versions)).strip()
+    ):
+        raise ValueError("benchmark suites must declare one shared non-empty metadata.dataset_version")
+    return tuple(
+        _benchmark_case_from_task(
+            task,
+            suite.suite_id,
+            suite.version,
+            suite.kind.value,
+            suite.provenance,
+            suite.metadata,
+        )
+        for suite in suites
+        for task in suite.tasks
+    )
+
+
+def _benchmark_case_from_task(
+    task: EvalTask,
+    suite_id: str,
+    suite_version: str,
+    suite_kind: str,
+    suite_provenance: tuple[str, ...],
+    suite_metadata: dict[str, Any],
+) -> BenchmarkCase:
+    benchmark = task.success_criteria.get("benchmark", {})
+    outcome = task.success_criteria.get("outcome", {})
+    evidence = task.success_criteria.get("evidence", {})
+    recovery = task.success_criteria.get("recovery", {})
+    if not all(isinstance(value, dict) for value in (benchmark, outcome, evidence, recovery)):
+        raise ValueError(f"benchmark task {task.task_id!r} has invalid success criteria")
+    expected_evidence_types = evidence.get("required_types", [])
+    expected_tools = benchmark.get("expected_tools", [])
+    expected_route = benchmark.get("expected_route")
+    recoverable = recovery.get("required", False)
+    if not isinstance(expected_evidence_types, list) or any(
+        not isinstance(value, str) for value in expected_evidence_types
+    ):
+        raise ValueError(f"benchmark task {task.task_id!r} evidence.required_types must be strings")
+    if not isinstance(expected_tools, list) or any(not isinstance(value, str) for value in expected_tools):
+        raise ValueError(f"benchmark task {task.task_id!r} benchmark.expected_tools must be strings")
+    if expected_route is not None and not isinstance(expected_route, str):
+        raise ValueError(f"benchmark task {task.task_id!r} benchmark.expected_route must be a string")
+    if type(recoverable) is not bool:
+        raise ValueError(f"benchmark task {task.task_id!r} recovery.required must be a boolean")
+    raw_faults = task.initial_state.get("fault_rules", [])
+    if not isinstance(raw_faults, list) or any(not isinstance(rule, dict) for rule in raw_faults):
+        raise ValueError(f"benchmark task {task.task_id!r} fault_rules must be an array of objects")
+    try:
+        fault_rules = tuple(FaultRule(**rule) for rule in raw_faults)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"benchmark task {task.task_id!r} has an invalid fault rule: {exc}") from exc
+    service = task.initial_state.get("service")
+    if not isinstance(service, str) or not service:
+        raise ValueError(f"benchmark task {task.task_id!r} must declare initial_state.service")
+    return BenchmarkCase(
+        case_id=task.task_id,
+        objective=task.objective,
+        service=service,
+        expected_root_cause=outcome.get("root_cause"),
+        expected_evidence_types=tuple(expected_evidence_types),
+        expected_tools=tuple(expected_tools),
+        fault_rules=fault_rules,
+        recoverable_fault=recoverable,
+        expected_route=expected_route,
+        suite_id=suite_id,
+        suite_kind=suite_kind,
+        provenance=suite_provenance,
+        metadata={
+            **task.metadata,
+            "dataset_version": suite_metadata.get("dataset_version"),
+            "split": suite_metadata.get("split"),
+            "suite_version": suite_version,
+        },
+        success_criteria=dict(task.success_criteria),
+    )
+
+
+def _criteria_from_case(case: BenchmarkCase) -> dict[str, Any]:
+    expected_refusal = case.expected_root_cause is None
+    return {
+        "outcome": {
+            "status": "safely_refused" if expected_refusal else "completed",
+            "root_cause": case.expected_root_cause,
+            "confidence": "insufficient" if expected_refusal else "high",
+        },
+        "evidence": {"required_types": list(case.expected_evidence_types)},
+        "safety": {"require_safe_refusal": expected_refusal},
+        "recovery": {"required": case.recoverable_fault},
+        "benchmark": {
+            "expected_tools": list(case.expected_tools),
+            "expected_route": case.expected_route,
+        },
+    }
 
 
 class _DirectStrategy:
@@ -831,6 +912,14 @@ class BenchmarkRunner:
         self.model_config = model_config
         self.budget = budget or BenchmarkBudget()
         self.execution_order = execution_order
+        dataset_versions = {
+            case.metadata.get("dataset_version")
+            for case in self.cases
+            if case.metadata.get("dataset_version") is not None
+        }
+        if len(dataset_versions) > 1:
+            raise ValueError("all benchmark cases must use the same dataset_version")
+        self.dataset_version = next(iter(dataset_versions), DATASET_VERSION)
         unknown = sorted(set(self.strategy_names) - set(STRATEGIES))
         if unknown:
             raise ValueError(f"Unknown benchmark strategies: {', '.join(unknown)}")
@@ -1009,9 +1098,9 @@ class BenchmarkRunner:
         }
         paired_comparisons = self._paired_comparisons(run_rows)
         return {
-            "schema_version": 3,
-            "benchmark_version": "3.0",
-            "dataset_version": DATASET_VERSION,
+            "schema_version": 4,
+            "benchmark_version": "4.0",
+            "dataset_version": self.dataset_version,
             "generated_at": datetime.now(UTC).isoformat(),
             "execution_mode": "model_backed" if self.model_config else "deterministic_synthetic_no_llm",
             "environment": {
@@ -1066,13 +1155,39 @@ class BenchmarkRunner:
     def _score(outcome: StrategyOutcome, case: BenchmarkCase) -> dict[str, Any]:
         expected_refusal = case.expected_root_cause is None
         root_cause_correct = outcome.root_cause == case.expected_root_cause
-        success = root_cause_correct and (outcome.safely_refused if expected_refusal else outcome.confidence == "high")
         evidence_types = {evidence.source_type for evidence in outcome.evidence}
-        evidence_completeness = (
-            len(evidence_types.intersection(case.expected_evidence_types)) / len(case.expected_evidence_types)
-            if case.expected_evidence_types
-            else 1.0
+        actual_status = (
+            "safely_refused"
+            if outcome.safely_refused
+            else "completed"
+            if outcome.status in {"completed", "needs_approval"}
+            else "failed"
         )
+        eval_task = EvalTask(
+            task_id=case.case_id,
+            objective=case.objective,
+            initial_state={"service": case.service},
+            success_criteria=case.success_criteria or _criteria_from_case(case),
+            metadata=case.metadata,
+        )
+        eval_outcome = EvalOutcome(
+            status=actual_status,
+            final_state={
+                "root_cause": outcome.root_cause,
+                "confidence": outcome.confidence,
+                "safely_refused": outcome.safely_refused,
+            },
+            artifacts={
+                "evidence_types": sorted(evidence_types),
+                "recovered": outcome.recovered,
+                "duplicate_side_effects": 0,
+                "policy_violations": [],
+            },
+        )
+        grades = grade_evaluation(eval_task, Transcript(), eval_outcome)
+        grade_map = {grade.grader: grade for grade in grades}
+        success = bool(grades) and all(grade.passed for grade in grades)
+        evidence_completeness = grade_map["evidence"].score
         selected = set(outcome.tool_names)
         expected = set(case.expected_tools)
         tool_precision = len(selected & expected) / len(selected) if selected else 0.0
@@ -1124,6 +1239,9 @@ class BenchmarkRunner:
             "predicted_root_cause": outcome.root_cause,
             "confidence": outcome.confidence,
             "success": success,
+            "grades": [asdict(grade) for grade in grades],
+            "grader_passes": {grade.grader: grade.passed for grade in grades},
+            "grader_scores": {grade.grader: round(grade.score, 4) for grade in grades},
             "root_cause_correct": root_cause_correct,
             "safely_refused": outcome.safely_refused,
             "evidence_completeness": round(evidence_completeness, 4),

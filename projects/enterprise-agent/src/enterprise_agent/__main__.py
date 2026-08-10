@@ -10,6 +10,7 @@ from .benchmark import (
     BenchmarkRunner,
     ModelBenchmarkConfig,
     STRATEGIES,
+    load_benchmark_cases,
     write_report,
 )
 from .faults import FaultInjector, FaultRule
@@ -73,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark_parser.add_argument("--output", default="work/benchmark-report.json")
     benchmark_parser.add_argument("--workspace", help="Keep isolated run databases in this directory")
+    benchmark_parser.add_argument(
+        "--suite",
+        help="Load benchmark cases from a versioned JSON/JSONL suite file or directory",
+    )
     _add_llm_arguments(benchmark_parser)
     benchmark_parser.add_argument("--max-model-calls", type=int, default=16)
     benchmark_parser.add_argument("--max-total-tokens", type=int, default=50_000)
@@ -142,6 +147,7 @@ def main() -> None:
                 max_estimated_cost_usd=args.max_estimated_cost_usd,
             )
             report = BenchmarkRunner(
+                cases=load_benchmark_cases(args.suite) if args.suite else None,
                 strategy_names=tuple(args.strategies),
                 model_config=model_config,
                 budget=budget,

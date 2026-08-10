@@ -105,9 +105,9 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 ### M2：数据集分层与 Grader 解耦
 
-- JSON/JSONL suite loader + Schema 校验；
-- outcome、evidence、safety、recovery grader 独立实现；
-- development/regression/held-out 目录与数据 provenance；
+- JSON/JSONL suite loader + Schema 校验（已完成）；
+- outcome、evidence、safety、recovery grader 独立实现（已完成）；
+- development/regression/held-out 目录与数据 provenance（5 条基线迁移已完成）；
 - 先扩至 20 条，再到 60 条。
 
 验收：新增 case 不改策略代码；每个失败能定位到 grader dimension。
@@ -171,7 +171,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 按优先级执行：
 
-1. 实现 suite loader 和四类独立 grader；
-2. 把 5 条内置 case 迁移到 development/regression 数据文件；
-3. 扩至 20 条，先消除“所有策略都是 1.0”的无区分评测；
+1. 从 5 条扩至 20 条审核 case，覆盖 capability、regression、security、recovery 和小型 held-out；
+2. 为新 case 补充可区分策略的环境状态和失败模式，先消除“所有策略都是 1.0”的无区分评测；
+3. 至少重复运行 3 次并提交 Benchmark v4 报告，检查 `pass^3` 与 grader dimension 失败分布；
 4. 再开始 PostgreSQL + Worker lease，避免同时扩数据与改运行时导致问题难以归因。

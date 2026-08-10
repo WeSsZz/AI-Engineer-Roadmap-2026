@@ -6,7 +6,9 @@
 
 - 当前版本：`incident-diagnosis-v1`
 - 当前规模：5 个确定性合成 case，包含正常事故、瞬时故障、超时、永久故障和健康服务
+- 数据位置：development 2 条、regression 3 条；held-out 不进入默认 benchmark
 - 标注：期望根因、证据类型、工具集合、是否应安全拒绝、故障是否可恢复
+- 评分：Benchmark v4 独立运行 outcome、evidence、safety、recovery grader，并保存逐 dimension 结果
 - 当前用途：验证评测管线和 Agent Infra 语义，不代表真实生产泛化能力
 - 后续目标：80–100 个开发/保留集分离的真实脱敏事故 case
 

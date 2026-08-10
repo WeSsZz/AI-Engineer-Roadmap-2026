@@ -49,6 +49,9 @@
 - 安全拒答使用一等终态 `safely_refused`，不与依赖、模型合约或 Runtime 故障混为 `failed`
 - 正式定义 Task、Trial、Transcript、Outcome、Grader 与 EvaluationSuite 合同
 - Benchmark v3 报告 `pass@1`、连续可靠性 `pass^3`、全通过 case 比例和逐 case 稳定性
+- JSON/JSONL suite loader 执行版本、字段类型、未知字段和跨 suite task ID 校验
+- 五条基线 case 已从策略代码迁入 development/regression 数据文件，held-out 保持独立空目录
+- outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
 
 当前演示任务：
 
@@ -139,6 +142,17 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 
 只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
+也可以加载一个外部 suite 文件或目录；新增 case 不需要修改策略代码：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent benchmark \
+  --suite src/enterprise_agent/suites/regression \
+  --strategies single_agent adaptive_harness \
+  --output work/regression-report.json
+```
+
+JSON suite 使用一个带 `tasks` 数组的对象；JSONL suite 使用一条 `record_type: suite` header，后接若干 `record_type: task` 记录。默认 benchmark 只加载 development 与 regression，不自动加载 held-out，避免保留集意外进入日常策略调试。
+
 用同一模型合约比较核心三种架构（会产生真实 API 费用）：
 
 ```bash
@@ -196,10 +210,13 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
-│   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
-│   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
-│   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
-│   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
+ │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
+ │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
+ │   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
+ │   ├── suite_loader.py    # JSON/JSONL suite 读取与版本化 Schema 校验
+ │   ├── graders.py         # outcome/evidence/safety/recovery 独立 grader
+ │   ├── suites/            # development/regression/held-out 版本化任务数据
+ │   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
 │   ├── agents.py          # Specialist、Verifier、Synthesis

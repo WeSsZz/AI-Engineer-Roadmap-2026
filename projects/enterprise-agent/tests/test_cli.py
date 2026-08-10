@@ -19,6 +19,11 @@ class CLITests(unittest.TestCase):
         self.assertEqual(active.orchestration, "adaptive")
         self.assertEqual(shadow.orchestration, "adaptive_shadow")
 
+    def test_benchmark_parser_accepts_external_suite_path(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(["benchmark", "--suite", "evals/regression"])
+        self.assertEqual(args.suite, "evals/regression")
+
     def test_benchmark_does_not_initialize_the_task_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "benchmark.json"
@@ -42,7 +47,7 @@ class CLITests(unittest.TestCase):
     def test_interrupted_benchmark_writes_partial_report_and_exits_130(self) -> None:
         partial = {
             "dataset_version": "incident-diagnosis-v1",
-            "benchmark_version": "3.0",
+            "benchmark_version": "4.0",
             "execution_mode": "model_backed",
             "execution_order": "counterbalanced",
             "model": {"provider": "deepseek"},
