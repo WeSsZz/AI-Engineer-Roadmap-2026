@@ -17,6 +17,17 @@ from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .llm import DeepSeekProvider, LLMConfig, LLMConfigurationError, LLMError, LLMProvider
 from .routing import ORCHESTRATION_MODES
+from .retrieval import (
+    DEFAULT_CORPUS_PATH,
+    DEFAULT_RETRIEVAL_SUITE_PATH,
+    build_bm25_index,
+    build_dense_index,
+    build_hybrid_index,
+    evaluate_retrieval,
+    load_corpus,
+    load_retrieval_suite,
+    write_retrieval_report,
+)
 from .store import SQLiteEventStore
 
 
@@ -82,6 +93,19 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--max-model-calls", type=int, default=16)
     benchmark_parser.add_argument("--max-total-tokens", type=int, default=50_000)
     benchmark_parser.add_argument("--max-estimated-cost-usd", type=float, default=0.10)
+    retrieval_parser = subparsers.add_parser(
+        "retrieval-benchmark",
+        help="Run the deterministic dense retrieval baseline",
+    )
+    retrieval_parser.add_argument("--corpus", default=str(DEFAULT_CORPUS_PATH))
+    retrieval_parser.add_argument("--suite", default=str(DEFAULT_RETRIEVAL_SUITE_PATH))
+    retrieval_parser.add_argument(
+        "--strategy",
+        choices=("dense", "bm25", "hybrid"),
+        default="dense",
+    )
+    retrieval_parser.add_argument("--top-k", type=int, default=5)
+    retrieval_parser.add_argument("--output", default="work/retrieval-baseline.json")
     smoke_parser = subparsers.add_parser("model-smoke", help="Make one live structured-output model call")
     smoke_parser.add_argument("--model", choices=("deepseek-v4-flash", "deepseek-v4-pro"))
     smoke_parser.add_argument("--thinking", choices=("enabled", "disabled"))
@@ -179,6 +203,44 @@ def main() -> None:
         )
         if report["budget"]["stop_reason"] == "user_interrupt":
             raise SystemExit(130)
+        return
+    if args.command == "retrieval-benchmark":
+        try:
+            corpus_version, _ = load_corpus(args.corpus)
+            suite_version, cases = load_retrieval_suite(args.suite)
+            if args.top_k <= 0:
+                raise ValueError("--top-k must be positive")
+            builders = {
+                "dense": build_dense_index,
+                "bm25": build_bm25_index,
+                "hybrid": build_hybrid_index,
+            }
+            report = evaluate_retrieval(
+                builders[args.strategy](args.corpus),
+                cases,
+                top_k=args.top_k,
+            )
+            report["corpus_version"] = corpus_version
+            report["suite_version"] = suite_version
+        except ValueError as exc:
+            parser.error(str(exc))
+        write_retrieval_report(report, args.output)
+        print(
+            json.dumps(
+                {
+                    "output": args.output,
+                    "corpus_version": corpus_version,
+                    "suite_version": suite_version,
+                    "case_count": report["case_count"],
+                    "retrieval_method": report["retrieval_method"],
+                    "embedding_provider": report["embedding_provider"],
+                    "index_version": report["index_version"],
+                    "metrics": report["metrics"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
     if args.command == "model-smoke":
         try:

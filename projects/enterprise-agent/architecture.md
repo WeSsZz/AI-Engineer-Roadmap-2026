@@ -8,7 +8,7 @@ Harness 控制单次任务如何推进；Knowledge & Memory Layer 提供可追�
 Agent Layer
   Metrics Investigator / Log Investigator / Runbook Researcher / Verifier / Synthesis
 
-Knowledge & Memory Layer (planned)
+Knowledge & Memory Layer (RAG R0-R2 implemented; Memory planned)
   Ingestion / Hybrid Retrieval / Reranker / Working Memory / Episodic Memory
 
 Runtime Layer

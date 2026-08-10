@@ -54,17 +54,22 @@
 - `incident-diagnosis-v2` 包含 20 条分层 case：development 6、regression 4、security 4、recovery 4、held-out 2
 - 原有 5 条标记为人工审核；新增 15 条 synthetic draft 明确标记为待人工复核
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
+- 版本化 `incident-runbooks:1.0.0` 合成语料、稳定 chunk ID 和严格字段校验
+- 依赖无关的 Hashing Dense、BM25 与 RRF Hybrid 三组基线，明确不把 hashing 冒充学习型语义 Embedding
+- 30 条独立 retrieval smoke set 与 Recall@5、MRR、NDCG、空结果准确率、延迟报告
+- `search_knowledge` 通过 Tool Gateway 执行租户/元数据过滤，并将索引版本、分数和来源写入 Evidence
+- 原 `get_runbook` 已成为版本化检索索引的兼容适配器，现有 Agent suite 与故障注入合同保持稳定
 
 ## 当前能力边界
 
-以下能力尚未实现，属于已经确定的下一阶段，而不是当前基线成果：
+RAG 的确定性 R0–R2 基线已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
 
-- 真实文档解析、切分、Embedding 与向量索引
-- BM25 + Dense Retrieval + RRF + Reranker 检索链路
-- 独立的检索标注集与 Recall@K、MRR、NDCG 报告
+- 公开许可语料的 Markdown/PDF 解析，以及学习型 Embedding 与持久化向量索引
+- 学习型 Dense Retrieval、Cross-Encoder Reranker 与经过真实数据验证的 Hybrid 链路
+- 80–100 条人工审核的开发/保留检索集与引用忠实度评测
 - 跨任务 Episodic Memory 的写入、检索、过期、删除和租户隔离
 
-当前 `get_runbook` 使用确定性 Demo 数据；`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于完整 RAG 或长期记忆。
+当前 R0–R2 使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称真实语义检索效果。在当前短文档集上 BM25 优于 hashing Dense 和 RRF，因此 `search_knowledge` 暂时默认 BM25；引入学习型 Embedding 后必须重新评测再决定是否切换 Hybrid。`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于长期记忆。
 
 当前演示任务：
 
@@ -153,6 +158,16 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
   --output work/benchmark-report.json
 ```
 
+运行当前确定性 Dense 检索基线：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent retrieval-benchmark \
+  --strategy bm25 \
+  --output work/retrieval-baseline.json
+```
+
+`--strategy` 支持 `dense`、`bm25` 和 `hybrid`。默认加载 10 份项目自编合成文档和 30 条 retrieval smoke case。报告会记录语料、suite、Embedding 和索引版本；也可以用 `--corpus`、`--suite` 和 `--top-k` 加载外部版本化数据。
+
 只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
 也可以加载一个外部 suite 文件或目录；新增 case 不需要修改策略代码：
@@ -223,8 +238,11 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
- │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
- │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
+│   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
+│   ├── retrieval.py       # 语料合同、切分、Dense baseline 与检索评测
+│   ├── corpora/           # 版本化知识语料
+│   ├── retrieval_suites/  # 独立检索评测集
+│   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
  │   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
  │   ├── suite_loader.py    # JSON/JSONL suite 读取与版本化 Schema 校验
  │   ├── graders.py         # outcome/evidence/safety/recovery 独立 grader
@@ -267,7 +285,7 @@ enterprise-agent/
 ## 下一阶段
 
 1. 冻结一组公开、可分享的 Runbook、事故复盘和运维 SOP 语料，并建立首批检索标注集。
-2. 实现 Dense baseline，再增加 BM25、RRF、Reranker 和引用忠实度评测，用真实检索替换确定性 `get_runbook`。
+2. 用公开许可语料和学习型 Embedding 替换当前合成/hashing 基线，再增加 Reranker 和引用忠实度评测。
 3. 在现有 Context Engine 上完成 Working Memory，并增加仅写入已验证事故的 Episodic Memory 最小闭环。
 4. 人工复核新增 15 条 synthetic draft，并将 Agent 与检索评测集分别扩展，避免用同一数据同时调策略和宣称效果。
 5. 数据合同稳定后增加 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。

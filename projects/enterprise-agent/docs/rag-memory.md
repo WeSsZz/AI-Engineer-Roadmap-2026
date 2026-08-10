@@ -7,8 +7,12 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 ## 当前状态
 
 - 已有 `Context Engine`：压缩当前任务的事实、证据和最近事件。
-- 已有 `get_runbook`：使用确定性 Demo 数据验证 Agent 与工具链路。
-- 尚无真实文档摄取、Embedding、BM25、向量索引、Reranker 或跨任务 Episodic Memory。
+- 已有版本化 JSON 语料、严格 Schema、确定性切分和稳定 chunk ID。
+- 已有 Hashing Dense、BM25、RRF Hybrid 三组 baseline、30 条 retrieval smoke set 和独立评测 CLI。
+- 已有 `search_knowledge` Tool Gateway 工具；`get_runbook` 是其兼容适配器。
+- Hashing baseline 不是学习型语义 Embedding；尚无公开语料解析、持久化向量索引、Reranker 或跨任务 Episodic Memory。
+
+当前合成 smoke set 上 BM25 的 MRR/NDCG 高于 Hashing Dense 和 RRF，Runtime 因此暂时选择 BM25。该选择只对当前版本数据成立；接入学习型 Embedding 和公开语料后必须重新比较。
 
 ## RAG 合同
 

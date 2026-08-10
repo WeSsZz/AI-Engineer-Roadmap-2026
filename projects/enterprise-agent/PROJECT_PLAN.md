@@ -128,6 +128,8 @@ RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、
 
 ### M3：Evaluated RAG Baseline
 
+状态：进行中。已完成版本化合成语料、确定性切分、Hashing Dense、BM25、RRF、30 条 smoke set、评测 CLI 和 Tool Gateway 集成；公开语料、学习型 Embedding、Reranker 与引用忠实度尚未完成。当前数据上 BM25 优于 RRF，Runtime 暂选 BM25，待 Embedding 升级后复评。
+
 - 冻结公开可分享的 Runbook、事故复盘和运维 SOP 语料；
 - 文档解析、chunk metadata、Dense baseline 与带引用 Evidence；
 - 增加 BM25、RRF 和可选 Reranker；

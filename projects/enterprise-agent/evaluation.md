@@ -70,14 +70,16 @@
 
 ## 检索实验
 
-状态：尚未运行。以下表格只定义计划中的 baseline，不代表已经实现或取得结果。检索数据集必须与 Agent suite 和 held-out 分开，并记录语料、Embedding、索引、Reranker 版本。
+2026-08-11 R0–R2：CPython 3.12.2、macOS arm64，项目自编 `incident-runbooks:1.0.0` 合成语料 10 份，`incident-retrieval-smoke:1.0.0` 共 30 条（26 条正样本、4 条范围/空结果负样本）。完整逐 case 结果见 [`retrieval-dense-v1.json`](benchmarks/retrieval-dense-v1.json)、[`retrieval-bm25-v1.json`](benchmarks/retrieval-bm25-v1.json) 和 [`retrieval-hybrid-v1.json`](benchmarks/retrieval-hybrid-v1.json)。
 
-| Run | 方法 | Recall@5 | MRR | P95 延迟 | 备注 |
-| --- | --- | ---: | ---: | ---: | --- |
-| R0 | Dense baseline |  |  |  |  |
-| R1 | BM25 |  |  |  |  |
-| R2 | Hybrid + RRF |  |  |  |  |
-| R3 | Hybrid + Reranker |  |  |  |  |
+R0 使用无外部依赖的 `hashing-char-ngram-v1`，用于验证语料、Chunk、Evidence、租户过滤和评测合同，不是学习型语义 Embedding。正样本评测在全语料上排序；负样本验证租户和 metadata scope。`payment-pool-action` 未进入 Dense Top-5，是当前明确 badcase；BM25 和 RRF 修复了 Top-5 召回。BM25 在这组短、术语密集的合成文档上 MRR/NDCG 最好，RRF 被较弱的 hashing Dense 拖累，因此 Runtime 当前选择 BM25。该结果不支持外推到真实企业语料。
+
+| Run | 方法 | Recall@5 | MRR | NDCG@5 | 空结果准确率 | P95 ms | 备注 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| R0 | Hashing Dense baseline | 0.9615 | 0.8590 | 0.8855 | 1.0000 | 0.192 | 1 个 Top-5 badcase |
+| R1 | BM25 | 1.0000 | 0.9327 | 0.9497 | 1.0000 | 0.127 | 当前 Runtime 默认 |
+| R2 | Dense + BM25 RRF | 1.0000 | 0.8923 | 0.9196 | 1.0000 | 0.372 | 召回恢复，排序弱于 BM25 |
+| R3 | Hybrid + Reranker |  |  |  |  |  | 计划中 |
 
 ## Memory 实验
 

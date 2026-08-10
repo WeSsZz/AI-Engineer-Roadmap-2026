@@ -27,11 +27,11 @@
 
 - [ ] 冻结首批可公开分享语料，记录许可、来源、版本和租户范围
 - [ ] 实现文档解析与元数据保留
-- [ ] 实现确定性切分的第一版，保存章节路径和稳定 chunk ID
+- [x] 实现确定性切分的第一版，保存章节路径和稳定 chunk ID
 - [ ] 生成 Embedding 并写入向量库
-- [ ] 实现 Top-K Dense Retrieval
-- [ ] 将检索结果转换为现有 Evidence，并通过 Tool Gateway 暴露 `search_knowledge`
-- [ ] 保存 30 条带相关文档/chunk 和不可回答标签的 retrieval smoke set
+- [x] 实现 Top-K Dense Retrieval（R0 为 hashing baseline，后续替换学习型 Embedding）
+- [x] 将检索结果转换为现有 Evidence，并通过 Tool Gateway 暴露 `search_knowledge`
+- [x] 保存 30 条带相关文档/chunk 和不可回答标签的 retrieval smoke set
 - [ ] 记录启动方式、模型版本和运行环境
 
 ## Week 3｜08-19—08-25：检索优化与评测集
@@ -40,8 +40,8 @@
 
 - [ ] 将独立检索集扩展到 80–100 条问题，并与 Agent suite/held-out 分开
 - [ ] 为每条问题标注相关文档或 chunk
-- [ ] 实现 BM25 关键词检索
-- [ ] 使用 RRF 或加权分数融合 Dense 与 BM25 结果
+- [x] 实现 BM25 关键词检索
+- [x] 使用 RRF 融合 Dense 与 BM25 结果，并保留组件 rank/score
 - [ ] 接入 Cross-Encoder Reranker
 - [ ] 统计 Recall@K、MRR、NDCG、引用忠实度和端到端延迟
 - [ ] 用真实 `search_knowledge` 替换确定性 `get_runbook`

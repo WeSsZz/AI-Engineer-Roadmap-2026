@@ -24,6 +24,27 @@ class CLITests(unittest.TestCase):
         args = parser.parse_args(["benchmark", "--suite", "evals/regression"])
         self.assertEqual(args.suite, "evals/regression")
 
+    def test_retrieval_parser_exposes_all_baseline_strategies(self) -> None:
+        parser = cli.build_parser()
+        for strategy in ("dense", "bm25", "hybrid"):
+            args = parser.parse_args(["retrieval-benchmark", "--strategy", strategy])
+            self.assertEqual(args.strategy, strategy)
+
+    def test_retrieval_benchmark_writes_versioned_report_without_task_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "retrieval.json"
+            argv = ["enterprise-agent", "retrieval-benchmark", "--output", str(output)]
+            with patch("sys.argv", argv), patch.object(
+                cli,
+                "SQLiteEventStore",
+                side_effect=AssertionError("task store should be lazy"),
+            ), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                cli.main()
+            report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(report["corpus_version"], "incident-runbooks:1.0.0")
+        self.assertEqual(report["suite_version"], "incident-retrieval-smoke:1.0.0")
+        self.assertEqual(report["case_count"], 30)
+
     def test_benchmark_does_not_initialize_the_task_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "benchmark.json"

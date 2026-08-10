@@ -42,7 +42,7 @@
 - checkpoint、resume、幂等副作用、Trace 和故障恢复
 - Fixed Workflow、Single-Agent、Multi-Agent 与 Adaptive Harness 对比评测
 
-当前已完成可靠 Runtime、Tool Gateway、Trace 和 Agent Evaluation 基线；真实 RAG 与 Episodic Memory 是接下来的主开发阶段，不能在完成前作为已实现能力宣传。
+当前已完成可靠 Runtime、Tool Gateway、Trace、Agent Evaluation，以及使用版本化合成语料的 Dense/BM25/RRF RAG 基线；公开语料、学习型 Embedding、Reranker 与 Episodic Memory 仍是下一阶段，不能在完成前作为已实现能力宣传。
 
 项目文档见 [`projects/enterprise-agent/README.md`](projects/enterprise-agent/README.md)。
 
