@@ -4,13 +4,14 @@
 
 构建一个面向企业知识库、业务查询和运维故障分析的可靠 Agent Runtime，重点展示：
 
-- 可评测的检索优化
+- 可评测的混合检索、重排与证据引用
+- 结构化 Working Memory 与受控 Episodic Memory
 - Multi-Agent 编排与证据验证
 - 可恢复的任务执行
 - 可靠工具调用与人工审批
 - 上下文管理、Trace 和故障恢复
 
-项目重点不是“多个模型互相聊天”，而是让一次 Agent 任务具备清晰的执行状态、权限边界、证据链、checkpoint、进程重启恢复和写操作幂等语义。
+项目重点不是“多个模型互相聊天”，而是让 Agent 获得正确、可追溯的上下文，并让一次任务具备清晰的执行状态、权限边界、证据链、checkpoint、进程重启恢复和写操作幂等语义。RAG 与 Memory 都必须经过 Tool Gateway、租户范围、Trace 和评测约束，不能成为绕过安全边界的旁路。
 
 ## 当前可运行基线
 
@@ -53,6 +54,17 @@
 - `incident-diagnosis-v2` 包含 20 条分层 case：development 6、regression 4、security 4、recovery 4、held-out 2
 - 原有 5 条标记为人工审核；新增 15 条 synthetic draft 明确标记为待人工复核
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
+
+## 当前能力边界
+
+以下能力尚未实现，属于已经确定的下一阶段，而不是当前基线成果：
+
+- 真实文档解析、切分、Embedding 与向量索引
+- BM25 + Dense Retrieval + RRF + Reranker 检索链路
+- 独立的检索标注集与 Recall@K、MRR、NDCG 报告
+- 跨任务 Episodic Memory 的写入、检索、过期、删除和租户隔离
+
+当前 `get_runbook` 使用确定性 Demo 数据；`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于完整 RAG 或长期记忆。
 
 当前演示任务：
 
@@ -239,6 +251,7 @@ enterprise-agent/
 - [`docs/adaptive-routing.md`](docs/adaptive-routing.md)：Shadow/Active 路由、恢复语义与上线门槛
 - [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
 - [`docs/model-provider.md`](docs/model-provider.md)：DeepSeek 配置、结构化契约和失败语义
+- [`docs/rag-memory.md`](docs/rag-memory.md)：RAG、Working Memory、Episodic Memory 的范围、合同与实施顺序
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -246,16 +259,18 @@ enterprise-agent/
 - 先建立可运行、可恢复的 baseline，再增加复杂模块。
 - 所有优化同时报告质量、延迟、成本和故障恢复指标。
 - Multi-Agent 必须与单 Agent/Workflow baseline 做实验比较。
+- RAG 必须比较 Dense、BM25、Hybrid 与 Rerank baseline，并保留语料和索引版本。
+- Memory 只保存有来源、可隔离、可过期和可删除的信息；历史记忆不能覆盖本次实时证据。
 - 工具默认最小权限；只读和写入工具分级管理。
 - 评测结果和简历数字必须由可复现实验产生。
 
 ## 下一阶段
 
-1. 人工复核新增 15 条 synthetic draft，冻结 reference outcome、权限边界和 provenance。
-2. 在不复制模板的前提下继续扩至 60 条审核任务。
-3. 增加 PostgreSQL、Worker lease、heartbeat、deadline、取消传播和分布式抢占。
-4. 增加 OpenTelemetry exporter、离线 replay 和真实 Prometheus/Logs/Ticketing 适配器。
-5. 导出稳定 trajectory schema 与 evaluator hooks，但不在本项目实现 RL Trainer。
+1. 冻结一组公开、可分享的 Runbook、事故复盘和运维 SOP 语料，并建立首批检索标注集。
+2. 实现 Dense baseline，再增加 BM25、RRF、Reranker 和引用忠实度评测，用真实检索替换确定性 `get_runbook`。
+3. 在现有 Context Engine 上完成 Working Memory，并增加仅写入已验证事故的 Episodic Memory 最小闭环。
+4. 人工复核新增 15 条 synthetic draft，并将 Agent 与检索评测集分别扩展，避免用同一数据同时调策略和宣称效果。
+5. 数据合同稳定后增加 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。
 
 完整升级边界、里程碑与停止条件见 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)。
 

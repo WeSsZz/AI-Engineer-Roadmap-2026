@@ -23,26 +23,28 @@
 
 ## Week 2｜08-12—08-18：基础 RAG
 
-里程碑：上传或导入文档后，可以返回带来源的回答。
+里程碑：导入公开 Runbook、事故复盘和运维 SOP 后，可以返回带来源、版本和 evidence ID 的检索结果。
 
+- [ ] 冻结首批可公开分享语料，记录许可、来源、版本和租户范围
 - [ ] 实现文档解析与元数据保留
-- [ ] 实现递归/语义切分的第一版
+- [ ] 实现确定性切分的第一版，保存章节路径和稳定 chunk ID
 - [ ] 生成 Embedding 并写入向量库
 - [ ] 实现 Top-K Dense Retrieval
-- [ ] 实现带引用来源的生成 Prompt
-- [ ] 保存 30 条初始问答样本作为 smoke test
+- [ ] 将检索结果转换为现有 Evidence，并通过 Tool Gateway 暴露 `search_knowledge`
+- [ ] 保存 30 条带相关文档/chunk 和不可回答标签的 retrieval smoke set
 - [ ] 记录启动方式、模型版本和运行环境
 
 ## Week 3｜08-19—08-25：检索优化与评测集
 
 里程碑：完成 Baseline、Hybrid Search、Rerank 三组可比较实验。
 
-- [ ] 将评测集扩展到 80–100 条问题
+- [ ] 将独立检索集扩展到 80–100 条问题，并与 Agent suite/held-out 分开
 - [ ] 为每条问题标注相关文档或 chunk
 - [ ] 实现 BM25 关键词检索
 - [ ] 使用 RRF 或加权分数融合 Dense 与 BM25 结果
 - [ ] 接入 Cross-Encoder Reranker
-- [ ] 统计 Recall@K、MRR、端到端延迟
+- [ ] 统计 Recall@K、MRR、NDCG、引用忠实度和端到端延迟
+- [ ] 用真实 `search_knowledge` 替换确定性 `get_runbook`
 - [ ] 将结果写入 `projects/enterprise-agent/evaluation.md`
 
 ## Week 4｜08-26—09-01：Tool Calling 与 Agent Loop
@@ -62,7 +64,9 @@
 里程碑：完成复杂任务演示，并发出第一批针对性申请。
 
 - [ ] 实现最小 Planner/Executor 流程
-- [ ] 实现会话摘要式短期记忆
+- [ ] 将 Context Engine 固化为结构化 Working Memory：事实、证据、计划和未决问题
+- [ ] 只为已完成且通过验证的事故写入最小 Episodic Memory
+- [ ] 增加租户隔离、过期、删除、冲突证据和 Prompt Injection 测试
 - [ ] 对比固定 Workflow 与动态 Agent 的适用场景
 - [ ] 比较单 Agent 与规划式 Agent 的成功率、延迟和 token 成本
 - [ ] 完成 AI Engineer 方向一页简历初稿

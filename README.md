@@ -14,7 +14,7 @@
 
 1. 学习 Hello-Agents，理解 ReAct、Tool Calling、Planning 与 Memory。
 2. 学习 MiniMind，跑通语言模型训练、推理与微调流程。
-3. 开发一个可评测、可部署的企业知识 Agent，而不是只做聊天 Demo。
+3. 开发一个集成可评测 RAG、受控 Memory 和可靠执行 Runtime 的企业 Agent，而不是只做聊天 Demo。
 4. 从第 5 周开始投递，并根据岗位反馈迭代项目与面试准备。
 
 ## 仓库导航
@@ -31,16 +31,18 @@
 
 ## 代表项目
 
-### Enterprise Knowledge Agent
+### Enterprise Knowledge & Operations Agent
 
-面向企业知识库和业务系统的智能 Agent，计划包含：
+面向企业知识库、业务系统和运维故障响应的可靠 Agent，整体能力分为“知识与记忆”和“可靠执行”两条互相验证的链路：
 
-- 文档解析、切分、Embedding 与向量检索
-- BM25 + Dense Retrieval 混合召回
-- Cross-Encoder Reranker
-- Tool Calling、Planner 与会话记忆
-- 检索质量、答案质量、延迟和成本评测
-- FastAPI AI 服务与 Spring Boot 业务服务协作
+- 文档解析、切分、Embedding、BM25 + Dense 混合召回与 Reranker
+- 带来源引用的 Evidence，以及 Recall、MRR、NDCG、忠实度和延迟评测
+- 结构化 Working Memory 与经过验证的历史事故 Episodic Memory
+- Tool Calling、证据验证、人工审批与最小权限控制
+- checkpoint、resume、幂等副作用、Trace 和故障恢复
+- Fixed Workflow、Single-Agent、Multi-Agent 与 Adaptive Harness 对比评测
+
+当前已完成可靠 Runtime、Tool Gateway、Trace 和 Agent Evaluation 基线；真实 RAG 与 Episodic Memory 是接下来的主开发阶段，不能在完成前作为已实现能力宣传。
 
 项目文档见 [`projects/enterprise-agent/README.md`](projects/enterprise-agent/README.md)。
 
@@ -61,6 +63,7 @@
 
 - [ ] 可运行的基础 RAG
 - [ ] 一份包含 baseline 的检索优化报告
+- [ ] 可解释、可删除且有租户边界的 Working/Episodic Memory 最小闭环
 - [ ] 至少两个可靠的 Agent 工具
 - [ ] 一次 MiniMind 或开源小模型微调实验
 - [ ] 3 分钟项目介绍和 30 分钟深挖材料

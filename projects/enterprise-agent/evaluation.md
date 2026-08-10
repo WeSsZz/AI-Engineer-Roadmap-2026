@@ -19,7 +19,17 @@
 
 - Recall@5 / Recall@10
 - MRR
-- Rerank 后的 NDCG（可选）
+- NDCG
+- 引用忠实度与不可回答问题的安全拒答率
+- 按语料版本、索引版本和检索阶段报告 P50/P95 延迟
+
+### Memory
+
+- Working Memory 压缩后的必需事实与 evidence ID 保留率
+- Episodic Memory precision/recall
+- 过期或已删除记忆的错误命中率
+- 跨租户泄漏次数
+- 历史记忆与实时证据冲突时的错误覆盖次数
 
 ### Answer
 
@@ -60,12 +70,25 @@
 
 ## 检索实验
 
+状态：尚未运行。以下表格只定义计划中的 baseline，不代表已经实现或取得结果。检索数据集必须与 Agent suite 和 held-out 分开，并记录语料、Embedding、索引、Reranker 版本。
+
 | Run | 方法 | Recall@5 | MRR | P95 延迟 | 备注 |
 | --- | --- | ---: | ---: | ---: | --- |
 | R0 | Dense baseline |  |  |  |  |
 | R1 | BM25 |  |  |  |  |
 | R2 | Hybrid + RRF |  |  |  |  |
 | R3 | Hybrid + Reranker |  |  |  |  |
+
+## Memory 实验
+
+状态：尚未运行。第一版覆盖 Working Memory 压缩，以及 Episodic Memory 的正确召回、过期、删除、冲突和跨租户场景。
+
+| Run | 场景 | Memory Precision | 必需事实保留率 | Policy Violations | 备注 |
+| --- | --- | ---: | ---: | ---: | --- |
+| M0 | Working Memory 压缩 |  |  |  |  |
+| M1 | 相似历史事故召回 |  |  |  |  |
+| M2 | 过期/删除/冲突记忆 |  |  |  |  |
+| M3 | 跨租户隔离 |  |  |  |  |
 
 ## Agent 实验
 
