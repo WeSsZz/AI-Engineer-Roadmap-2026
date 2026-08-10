@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=list(STRATEGIES),
     )
     benchmark_parser.add_argument("--repetitions", type=int, default=1)
+    benchmark_parser.add_argument(
+        "--execution-order",
+        choices=("fixed", "counterbalanced"),
+        default="counterbalanced",
+    )
     benchmark_parser.add_argument("--output", default="work/benchmark-report.json")
     benchmark_parser.add_argument("--workspace", help="Keep isolated run databases in this directory")
     _add_llm_arguments(benchmark_parser)
@@ -131,6 +136,7 @@ def main() -> None:
                 strategy_names=tuple(args.strategies),
                 model_config=model_config,
                 budget=budget,
+                execution_order=args.execution_order,
             ).run(
                 repetitions=args.repetitions,
                 workspace=args.workspace,
@@ -144,10 +150,13 @@ def main() -> None:
                 {
                     "output": args.output,
                     "dataset_version": report["dataset_version"],
+                    "benchmark_version": report["benchmark_version"],
                     "execution_mode": report["execution_mode"],
+                    "execution_order": report["execution_order"],
                     "model": report["model"],
                     "budget": report["budget"],
                     "aggregates": report["aggregates"],
+                    "paired_comparisons": report["paired_comparisons"],
                 },
                 ensure_ascii=False,
                 indent=2,

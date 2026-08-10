@@ -35,10 +35,13 @@ class CLITests(unittest.TestCase):
     def test_interrupted_benchmark_writes_partial_report_and_exits_130(self) -> None:
         partial = {
             "dataset_version": "incident-diagnosis-v1",
+            "benchmark_version": "2.1",
             "execution_mode": "model_backed",
+            "execution_order": "counterbalanced",
             "model": {"provider": "deepseek"},
             "budget": {"stopped_early": True, "stop_reason": "user_interrupt"},
             "aggregates": {},
+            "paired_comparisons": {},
         }
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "partial.json"

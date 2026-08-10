@@ -79,7 +79,7 @@ class ModelBenchmarkTests(unittest.TestCase):
 
         self.assertEqual(report["schema_version"], 2)
         self.assertEqual(report["execution_mode"], "model_backed")
-        self.assertEqual(report["completed_run_count"], 4)
+        self.assertEqual(report["completed_run_count"], 5)
         self.assertNotIn("test-key", json.dumps(report))
         self.assertNotIn("You are the evidence-bound", json.dumps(report))
         self.assertEqual(len(report["model"]["prompt_fingerprint_sha256"]), 64)
@@ -123,6 +123,7 @@ class ModelBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report = BenchmarkRunner(
                 cases=(default_cases()[0],),
+                strategy_names=("fixed_workflow", "single_agent", "plan_executor", "multi_agent"),
                 model_config=_model_config(),
                 budget=BenchmarkBudget(
                     max_model_calls=4,
@@ -138,6 +139,7 @@ class ModelBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             complete = BenchmarkRunner(
                 cases=(default_cases()[0],),
+                strategy_names=("fixed_workflow", "single_agent", "plan_executor", "multi_agent"),
                 model_config=_model_config(),
                 budget=BenchmarkBudget(
                     max_model_calls=4,

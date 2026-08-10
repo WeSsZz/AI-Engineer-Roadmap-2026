@@ -75,6 +75,8 @@
 
 当前已接入 DeepSeek V4 Flash Provider 与 Model-backed Benchmark v2，但已提交的基准仍标记为 `deterministic_synthetic_no_llm`。2026-08-10 的单次真实 smoke 为 67 tokens / 1562 ms，单次事故综合为 553 tokens / 2998 ms，且审批恢复没有重复调用模型；这些数字只用于验证调用、usage 和恢复链路。在重复运行并保存 v2 报告前，不把 mock 测试或单样本数字写成模型效果、方差或成本结论。
 
+2026-08-10 的 2 repetitions × Single-Agent/Multi-Agent Model-backed 报告完成 20/20 runs、12 次模型调用，Schema 合规率与任务成功率均为 1.0，总估算成本约 0.000785 美元。由于当时策略执行顺序固定且样本量仅为 2，该结果只作为 v2 基线；v2.1 已增加交叉平衡顺序、成对差异和 Bootstrap 区间，并加入 Adaptive Harness，下一次真实实验应使用新方法。
+
 ## Tool Gateway 实验
 
 | Run | 策略 | Recovery Rate | Invalid Call Rate | P95 延迟 | 平均 Attempts |

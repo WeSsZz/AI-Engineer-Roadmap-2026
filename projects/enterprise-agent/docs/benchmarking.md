@@ -12,8 +12,9 @@
 | Single Agent | 单个 Generalist 根据前一步结果决定是否继续 | 自适应低开销 baseline |
 | Plan-Executor | Planner 产生显式计划，Executor 自适应执行 | 规划与执行边界 baseline |
 | Multi-Agent | 三个 Specialist 并行，Verifier 交叉验证，Synthesis 汇总 | 隔离上下文、审计和恢复能力 baseline |
+| Adaptive Harness | Metrics triage 后按风险选择单 Agent 拒答或多 Specialist + Verifier | 企业级质量、成本和风险折中方案 |
 
-默认模式使用无外部 LLM 的确定性 policy adapter，只评估编排和 Agent Infra。Model-backed 模式让四种策略都复用生产路径中的 `IncidentSynthesisAgent`、同一结构化输出契约和 evidence allowlist，避免为 benchmark 单独实现一套“宽松答案解析器”。
+默认模式使用无外部 LLM 的确定性 policy adapter，只评估编排和 Agent Infra。Model-backed 模式让五种策略都复用生产路径中的 `IncidentSynthesisAgent`、同一结构化输出契约和 evidence allowlist，避免为 benchmark 单独实现一套“宽松答案解析器”。
 
 ## 数据集
 
@@ -42,6 +43,8 @@
 - Model latency：每个模型 attempt 的总耗时、均值和总体标准差。
 - Estimated cost：按报告内固定的价格快照估算，不等同于账单。
 - Prediction consistency：同一策略、同一 case 重复运行时，众数预测所占比例。
+- Paired comparison：按 case + repetition 配对，报告候选策略相对 Single-Agent 的成功率、延迟、工具、token 和成本差。
+- Bootstrap 95% CI：对成对平均延迟差进行固定种子的非参数重采样；小样本区间只用于暴露不确定性，不替代扩大数据集。
 
 ## 隔离与复现
 
@@ -55,15 +58,16 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 
 ## Model-backed v2
 
-先做一个较小的双策略运行：
+先做一个较小的核心三策略运行：
 
 ```bash
 PYTHONPATH=src python -m enterprise_agent benchmark \
   --llm-provider deepseek \
   --model deepseek-v4-flash \
   --thinking disabled \
-  --strategies single_agent multi_agent \
+  --strategies single_agent multi_agent adaptive_harness \
   --repetitions 2 \
+  --max-model-calls 18 \
   --workspace work/deepseek-benchmark-runs \
   --output work/deepseek-benchmark-v2.json
 ```
@@ -73,6 +77,14 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 CLI 在每个 run 开始和结束时向 `stderr` 实时输出进度，并立即 flush；完成行包含累计模型调用、token、估算成本和 wall-clock 时间。收到 `Ctrl+C` 后，Runner 会关闭当前 Runtime、保留已经完成的 runs、写出 partial report，并以 `stop_reason: user_interrupt` 和退出码 130 明确区分用户中断与失败。模型预算达到上限后，只跳过后续需要模型的正样本；不调用模型的负样本仍继续执行，以免安全拒答指标被预算调度系统性漏采样。
 
 报告 schema v2 包含 prompt 与非敏感运行配置的 SHA-256 指纹、价格快照和提前停止原因；不包含 API key、完整 prompt、原始响应或 reasoning content。DeepSeek V4 Flash 的价格快照来自[官方价格页](https://api-docs.deepseek.com/quick_start/pricing)，缓存是 best-effort，命中行为应结合[上下文缓存说明](https://api-docs.deepseek.com/guides/kv_cache)解释。
+
+## Benchmark v2.1 方法
+
+默认 `--execution-order counterbalanced` 按 repetition 和 case 轮换策略位置，避免 Single-Agent 永远先请求模型、Multi-Agent 永远后请求模型的顺序混杂。每个 run 记录 repetition 和执行位置。`paired_comparisons` 以 Single-Agent 为 baseline，分别报告全部 case 与实际调用模型的 case；Bootstrap 使用 2,000 次固定种子重采样，保证报告可复现。
+
+`normalized_status` 统一策略内部不同状态：正确正样本为 `completed`，正确负样本为 `safely_refused`，合约或执行错误为 `failed`。`status` 仍保存底层 Runtime 原始值，避免为了评分丢失审计信息。
+
+Adaptive Harness 的 Router 先读取 Metrics：低于事故阈值时走 `single_agent_triage` 并安全拒答；高风险异常走 `verified_multi_agent`，并行调查 Logs/Runbook，经过 Verifier 后才允许模型综合。每次选择同时写入 route、routing reason 和 Span attributes。
 
 ## 当前结果边界
 

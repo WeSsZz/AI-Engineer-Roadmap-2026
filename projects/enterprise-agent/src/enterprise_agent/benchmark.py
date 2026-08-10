@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import platform
+import random
 import statistics
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -165,6 +167,10 @@ class StrategyOutcome:
     prompt_cache_miss_tokens: int = 0
     model_latency_ms: float = 0.0
     estimated_cost_usd: float = 0.0
+    route: str | None = None
+    routing_reason: str | None = None
+    repetition: int = 0
+    execution_order_position: int = 0
 
 
 class BenchmarkStrategy(Protocol):
@@ -269,6 +275,7 @@ class _DirectStrategy:
             and any(record.status == "completed" for record in records)
         )
         self._populate_model_metrics(outcome, provider)
+        outcome.route = outcome.route or self.name
         return outcome
 
     def _execute(
@@ -550,6 +557,171 @@ class PlanExecutorStrategy(_DirectStrategy):
                 return outcome
 
 
+class AdaptiveHarnessStrategy(_DirectStrategy):
+    name = "adaptive_harness"
+
+    def _execute(
+        self,
+        case: BenchmarkCase,
+        task_id: str,
+        runtime: ToolRuntime,
+        tracer: SQLiteTraceRecorder,
+        provider: LLMProvider | None,
+    ) -> StrategyOutcome:
+        with tracer.start_span(
+            trace_id=task_id,
+            task_id=task_id,
+            name="strategy.adaptive_harness",
+            kind=SpanKind.RUNTIME,
+        ) as root:
+            try:
+                with tracer.start_span(
+                    trace_id=task_id,
+                    task_id=task_id,
+                    parent_span_id=root.span_id,
+                    name="agent.risk_router",
+                    kind=SpanKind.AGENT,
+                ) as router:
+                    metrics = self._call(
+                        runtime,
+                        task_id,
+                        router.span_id,
+                        "query_service_metrics",
+                        {"service": case.service, "window_minutes": 15},
+                    )
+                    anomalous = bool(
+                        metrics.data["error_rate"] >= 0.05
+                        and metrics.data["db_pool_utilization"] >= 0.90
+                    )
+                    write_intent = "工单" in case.objective or "ticket" in case.objective.lower()
+                    risk_score = int(anomalous) * 2 + int(write_intent)
+                    router.set_attribute("anomalous", anomalous)
+                    router.set_attribute("write_intent", write_intent)
+                    router.set_attribute("risk_score", risk_score)
+            except ToolError as exc:
+                outcome = self._outcome(case, task_id, [], None)
+                outcome.route = "single_agent_triage"
+                outcome.routing_reason = "metrics_unavailable"
+                outcome.error = f"{type(exc).__name__}: {exc}"
+                return outcome
+
+            if not anomalous:
+                root.set_attribute("selected_route", "single_agent_triage")
+                outcome = self._outcome(case, task_id, list(metrics.evidence), None)
+                outcome.route = "single_agent_triage"
+                outcome.routing_reason = "metrics_below_incident_threshold"
+                return outcome
+
+            root.set_attribute("selected_route", "verified_multi_agent")
+            routing_reason = (
+                "high_risk_anomaly_with_write_intent"
+                if write_intent
+                else "anomaly_requires_evidence_verification"
+            )
+            outputs: dict[str, ToolOutput] = {}
+            errors: list[str] = []
+
+            def investigate(
+                agent_name: str,
+                tool_name: str,
+                arguments: dict[str, Any],
+            ) -> ToolOutput:
+                with tracer.start_span(
+                    trace_id=task_id,
+                    task_id=task_id,
+                    parent_span_id=root.span_id,
+                    name=f"agent.{agent_name}",
+                    kind=SpanKind.AGENT,
+                ) as specialist:
+                    return self._call(
+                        runtime,
+                        task_id,
+                        specialist.span_id,
+                        tool_name,
+                        arguments,
+                    )
+
+            investigations = {
+                "logs": (
+                    "log_investigator",
+                    "search_logs",
+                    {"service": case.service, "severity": "error", "limit": 20},
+                ),
+                "runbook": (
+                    "runbook_researcher",
+                    "get_runbook",
+                    {"service": case.service, "symptom": "database_pool_exhaustion"},
+                ),
+            }
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    executor.submit(investigate, *arguments): key
+                    for key, arguments in investigations.items()
+                }
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        outputs[key] = future.result()
+                    except ToolError as exc:
+                        errors.append(f"{type(exc).__name__}: {exc}")
+
+            evidence = list(metrics.evidence)
+            for key in ("logs", "runbook"):
+                if key in outputs:
+                    evidence.extend(outputs[key].evidence)
+            if errors:
+                outcome = self._outcome(case, task_id, evidence, None)
+                outcome.route = "verified_multi_agent"
+                outcome.routing_reason = routing_reason
+                outcome.error = "; ".join(errors)
+                return outcome
+
+            logs = outputs["logs"]
+            runbook = outputs["runbook"]
+            correlated = bool(
+                any(entry["code"] == "DB_POOL_TIMEOUT" for entry in logs.data["entries"])
+                and runbook.data["runbook"]
+            )
+            with tracer.start_span(
+                trace_id=task_id,
+                task_id=task_id,
+                parent_span_id=root.span_id,
+                name="agent.verifier",
+                kind=SpanKind.AGENT,
+                attributes={"correlated": correlated, "evidence_count": len(evidence)},
+            ):
+                pass
+            if correlated and provider is not None:
+                with tracer.start_span(
+                    trace_id=task_id,
+                    task_id=task_id,
+                    parent_span_id=root.span_id,
+                    name="agent.incident_synthesis_agent",
+                    kind=SpanKind.AGENT,
+                ) as synthesis:
+                    outcome = self._model_outcome(
+                        case,
+                        task_id,
+                        synthesis.span_id,
+                        provider,
+                        metrics,
+                        logs,
+                        runbook,
+                    )
+            else:
+                outcome = self._outcome(
+                    case,
+                    task_id,
+                    evidence,
+                    "database_pool_exhaustion" if correlated else None,
+                )
+            outcome.route = "verified_multi_agent"
+            outcome.routing_reason = routing_reason
+            if outcome.root_cause is not None and write_intent:
+                outcome.status = "needs_approval"
+            return outcome
+
+
 class MultiAgentStrategy:
     name = "multi_agent"
 
@@ -601,6 +773,8 @@ class MultiAgentStrategy:
                 if result.state.artifacts.get("model_call") is None and result.state.artifacts.get("model_error") is None
                 else result.state.artifacts.get("model_error") is None
             ),
+            route="fixed_multi_agent",
+            routing_reason="strategy_forced",
         )
         if provider is not None:
             records = tuple(getattr(provider, "invocations", ()))
@@ -624,6 +798,7 @@ STRATEGIES: dict[str, type[BenchmarkStrategy]] = {
     "single_agent": SingleAgentStrategy,
     "plan_executor": PlanExecutorStrategy,
     "multi_agent": MultiAgentStrategy,
+    "adaptive_harness": AdaptiveHarnessStrategy,
 }
 
 
@@ -634,14 +809,18 @@ class BenchmarkRunner:
         strategy_names: tuple[str, ...] | None = None,
         model_config: ModelBenchmarkConfig | None = None,
         budget: BenchmarkBudget | None = None,
+        execution_order: str = "counterbalanced",
     ) -> None:
         self.cases = cases or default_cases()
         self.strategy_names = strategy_names or tuple(STRATEGIES)
         self.model_config = model_config
         self.budget = budget or BenchmarkBudget()
+        self.execution_order = execution_order
         unknown = sorted(set(self.strategy_names) - set(STRATEGIES))
         if unknown:
             raise ValueError(f"Unknown benchmark strategies: {', '.join(unknown)}")
+        if execution_order not in {"fixed", "counterbalanced"}:
+            raise ValueError("execution_order must be 'fixed' or 'counterbalanced'")
 
     def run(
         self,
@@ -664,6 +843,7 @@ class BenchmarkRunner:
         try:
             for repetition in range(repetitions):
                 for case_index, case in enumerate(self.cases):
+                    ordered_strategies = self._strategy_order(repetition, case_index)
                     skip_reason: str | None = None
                     if self.model_config is not None and case.expected_root_cause is not None:
                         skip_reason = self._budget_stop_reason(outcomes)
@@ -673,7 +853,7 @@ class BenchmarkRunner:
                             skip_reason = skip_reason or "max_model_calls"
                     if skip_reason:
                         stop_reason = stop_reason or skip_reason
-                        for strategy_index, strategy_name in enumerate(self.strategy_names):
+                        for strategy_index, strategy_name in enumerate(ordered_strategies):
                             run_index = self._run_index(repetition, case_index, strategy_index)
                             self._emit_progress(
                                 progress_callback,
@@ -689,7 +869,7 @@ class BenchmarkRunner:
                                 reason=skip_reason,
                             )
                         continue
-                    for strategy_index, strategy_name in enumerate(self.strategy_names):
+                    for strategy_index, strategy_name in enumerate(ordered_strategies):
                         run_index = self._run_index(repetition, case_index, strategy_index)
                         current = (repetition, case.case_id, strategy_name, run_index)
                         self._emit_progress(
@@ -707,6 +887,8 @@ class BenchmarkRunner:
                         run_directory = root / f"r{repetition}-{case.case_id}-{strategy_name}"
                         run_directory.mkdir(parents=True, exist_ok=True)
                         outcome = STRATEGIES[strategy_name](self.model_config).run(case, run_directory)
+                        outcome.repetition = repetition + 1
+                        outcome.execution_order_position = strategy_index + 1
                         outcomes.append(outcome)
                         self._emit_progress(
                             progress_callback,
@@ -742,6 +924,12 @@ class BenchmarkRunner:
             if temporary is not None:
                 temporary.cleanup()
         return self._report(outcomes, repetitions, stop_reason)
+
+    def _strategy_order(self, repetition: int, case_index: int) -> tuple[str, ...]:
+        if self.execution_order == "fixed" or len(self.strategy_names) < 2:
+            return self.strategy_names
+        offset = (repetition * len(self.cases) + case_index) % len(self.strategy_names)
+        return self.strategy_names[offset:] + self.strategy_names[:offset]
 
     def _run_index(self, repetition: int, case_index: int, strategy_index: int) -> int:
         runs_per_repetition = len(self.cases) * len(self.strategy_names)
@@ -804,8 +992,10 @@ class BenchmarkRunner:
             strategy: self._aggregate([row for row in run_rows if row["strategy"] == strategy])
             for strategy in self.strategy_names
         }
+        paired_comparisons = self._paired_comparisons(run_rows)
         return {
             "schema_version": 2,
+            "benchmark_version": "2.1",
             "dataset_version": DATASET_VERSION,
             "generated_at": datetime.now(UTC).isoformat(),
             "execution_mode": "model_backed" if self.model_config else "deterministic_synthetic_no_llm",
@@ -818,6 +1008,7 @@ class BenchmarkRunner:
             "case_count": len(self.cases),
             "cases": [asdict(case) for case in self.cases],
             "strategies": list(self.strategy_names),
+            "execution_order": self.execution_order,
             "model": self._model_report_config(),
             "budget": {
                 **asdict(self.budget),
@@ -827,6 +1018,7 @@ class BenchmarkRunner:
             "planned_run_count": planned_run_count,
             "completed_run_count": len(run_rows),
             "aggregates": aggregates,
+            "paired_comparisons": paired_comparisons,
             "runs": run_rows,
         }
 
@@ -870,11 +1062,29 @@ class BenchmarkRunner:
         expected = set(case.expected_tools)
         tool_precision = len(selected & expected) / len(selected) if selected else 0.0
         tool_recall = len(selected & expected) / len(expected) if expected else 1.0
+        if success and expected_refusal:
+            outcome_class = "safe_refusal"
+            normalized_status = "safely_refused"
+        elif success:
+            outcome_class = "success"
+            normalized_status = "completed"
+        elif outcome.model_schema_compliant is False:
+            outcome_class = "model_contract_failure"
+            normalized_status = "failed"
+        else:
+            outcome_class = "execution_failure"
+            normalized_status = "failed"
         return {
             "strategy": outcome.strategy,
             "case_id": outcome.case_id,
             "task_id": outcome.task_id,
+            "repetition": outcome.repetition,
+            "execution_order_position": outcome.execution_order_position,
             "status": outcome.status,
+            "normalized_status": normalized_status,
+            "outcome_class": outcome_class,
+            "route": outcome.route,
+            "routing_reason": outcome.routing_reason,
             "predicted_root_cause": outcome.root_cause,
             "confidence": outcome.confidence,
             "success": success,
@@ -909,6 +1119,14 @@ class BenchmarkRunner:
         schema_rows = [row for row in rows if row["model_schema_compliant"] is not None]
         cache_tokens = sum(row["prompt_cache_hit_tokens"] + row["prompt_cache_miss_tokens"] for row in rows)
         mean = lambda key: round(sum(float(row[key]) for row in rows) / len(rows), 4) if rows else 0.0
+        route_distribution = {
+            route: sum(row["route"] == route for row in rows)
+            for route in sorted({row["route"] for row in rows if row["route"] is not None})
+        }
+        outcome_distribution = {
+            outcome_class: sum(row["outcome_class"] == outcome_class for row in rows)
+            for outcome_class in sorted({row["outcome_class"] for row in rows})
+        }
         return {
             "run_count": len(rows),
             "task_success_rate": mean("success"),
@@ -947,6 +1165,57 @@ class BenchmarkRunner:
             ) if len(model_rows) > 1 else 0.0 if model_rows else None,
             "estimated_cost_usd": round(sum(row["estimated_cost_usd"] for row in rows), 9),
             "prediction_consistency_rate": BenchmarkRunner._prediction_consistency(rows),
+            "route_distribution": route_distribution,
+            "outcome_distribution": outcome_distribution,
+        }
+
+    def _paired_comparisons(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if "single_agent" not in self.strategy_names:
+            return {}
+        comparisons = {}
+        for candidate in self.strategy_names:
+            if candidate == "single_agent":
+                continue
+            baseline_rows = {
+                (row["case_id"], row["repetition"]): row
+                for row in rows
+                if row["strategy"] == "single_agent"
+            }
+            candidate_rows = {
+                (row["case_id"], row["repetition"]): row
+                for row in rows
+                if row["strategy"] == candidate
+            }
+            keys = sorted(set(baseline_rows).intersection(candidate_rows))
+            pairs = [(baseline_rows[key], candidate_rows[key]) for key in keys]
+            model_pairs = [pair for pair in pairs if pair[0]["model_calls"] or pair[1]["model_calls"]]
+            comparisons[f"{candidate}_vs_single_agent"] = {
+                "all_cases": self._paired_statistics(pairs),
+                "model_cases": self._paired_statistics(model_pairs),
+            }
+        return comparisons
+
+    @staticmethod
+    def _paired_statistics(
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+    ) -> dict[str, Any]:
+        latency_deltas = [candidate["latency_ms"] - baseline["latency_ms"] for baseline, candidate in pairs]
+        tool_deltas = [candidate["tool_attempts"] - baseline["tool_attempts"] for baseline, candidate in pairs]
+        token_deltas = [candidate["total_tokens"] - baseline["total_tokens"] for baseline, candidate in pairs]
+        cost_deltas = [
+            candidate["estimated_cost_usd"] - baseline["estimated_cost_usd"]
+            for baseline, candidate in pairs
+        ]
+        success_deltas = [int(candidate["success"]) - int(baseline["success"]) for baseline, candidate in pairs]
+        return {
+            "pair_count": len(pairs),
+            "mean_success_delta": _mean(success_deltas),
+            "mean_latency_delta_ms": _mean(latency_deltas, digits=3),
+            "median_latency_delta_ms": round(statistics.median(latency_deltas), 3) if latency_deltas else None,
+            "bootstrap_95_ci_mean_latency_delta_ms": _bootstrap_mean_ci(latency_deltas),
+            "mean_tool_attempt_delta": _mean(tool_deltas),
+            "mean_total_token_delta": _mean(token_deltas),
+            "mean_estimated_cost_delta_usd": _mean(cost_deltas, digits=9),
         }
 
     @staticmethod
@@ -968,6 +1237,28 @@ def _percentile(values: list[float], percentile: float) -> float | None:
         return None
     rank = max(1, int(len(values) * percentile + 0.999999999))
     return round(values[min(rank, len(values)) - 1], 3)
+
+
+def _mean(values: list[float | int], *, digits: int = 4) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), digits)
+
+
+def _bootstrap_mean_ci(values: list[float], *, samples: int = 2_000) -> list[float] | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        value = round(values[0], 3)
+        return [value, value]
+    generator = random.Random(20260810)
+    means = sorted(
+        sum(generator.choice(values) for _ in values) / len(values)
+        for _ in range(samples)
+    )
+    lower = means[int((samples - 1) * 0.025)]
+    upper = means[int((samples - 1) * 0.975)]
+    return [round(lower, 3), round(upper, 3)]
 
 
 def write_report(report: dict[str, Any], path: str | Path) -> None:

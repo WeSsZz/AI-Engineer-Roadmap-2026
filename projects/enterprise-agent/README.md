@@ -36,12 +36,14 @@
 - failpoint 模拟进程在关键故障窗口中断
 - Fault Injector 可确定性模拟 transient、permanent 和 timeout 数据源故障
 - Metrics、Logs、Runbook 证据交叉一致后才输出高置信根因
-- Fixed Workflow、Single-Agent、Plan-Executor、Multi-Agent 统一评测器
+- Fixed Workflow、Single-Agent、Plan-Executor、Multi-Agent、Adaptive Harness 统一评测器
 - 版本化事故数据集、隔离运行目录和可复现 JSON benchmark report
 - DeepSeek V4 Flash 结构化综合适配器，保留 deterministic 模式
 - Model attempt Span 记录模型、延迟、token 和 prompt cache 命中
 - Model-backed Benchmark v2 记录 token、估算成本、Schema 合规率、缓存命中率和重复运行方差
 - 模型调用数、总 token 和估算成本三重预算，防止评测失控
+- Adaptive Harness 根据指标风险在单 Agent triage 和多 Specialist 验证之间做可审计升级
+- Benchmark v2.1 交叉平衡执行顺序，并输出成对差异与 Bootstrap 95% 置信区间
 
 当前演示任务：
 
@@ -102,7 +104,7 @@ PYTHONPATH=src python -m enterprise_agent \
   --db work/enterprise_agent.db trace TASK_ID
 ```
 
-运行四种架构的对比评测：
+运行五种架构的对比评测：
 
 ```bash
 PYTHONPATH=src python -m enterprise_agent benchmark \
@@ -110,18 +112,19 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
   --output work/benchmark-report.json
 ```
 
-只运行部分策略可使用 `--strategies single_agent multi_agent`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
+只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
-用同一模型合约比较四种架构（会产生真实 API 费用）：
+用同一模型合约比较核心三种架构（会产生真实 API 费用）：
 
 ```bash
 PYTHONPATH=src python -m enterprise_agent benchmark \
   --llm-provider deepseek \
   --model deepseek-v4-flash \
   --thinking disabled \
+  --strategies single_agent multi_agent adaptive_harness \
   --repetitions 3 \
-  --max-model-calls 36 \
-  --max-total-tokens 30000 \
+  --max-model-calls 27 \
+  --max-total-tokens 25000 \
   --max-estimated-cost-usd 0.02 \
   --workspace work/deepseek-benchmark-runs \
   --output work/deepseek-benchmark-v2.json
@@ -130,6 +133,8 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 Benchmark 不传递审批 token，也不执行 `create_ticket`；预算在完整 case 边界检查。报告只保存非敏感配置指纹，不保存 API key、完整 prompt 或原始响应。
 
 执行期间会实时输出当前 repetition、strategy、case、累计模型调用、token、成本和耗时。按 `Ctrl+C` 会保存已经完成的 runs 到指定报告，标记 `stop_reason: user_interrupt`，并以状态码 130 退出。模型预算耗尽后，系统会跳过后续需要模型的正样本，但仍完成健康或证据不足等零模型 case。
+
+默认使用 `counterbalanced` 顺序，让策略轮换先后位置，降低模型服务时间漂移带来的顺序偏差；可用 `--execution-order fixed` 重现旧顺序。报告把底层 Runtime 状态统一映射为 `completed`、`safely_refused`、`failed`，同时保留原始状态用于审计。
 
 运行测试：
 
@@ -164,7 +169,7 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
-│   ├── benchmark.py       # 数据集、四种策略、评分与报告
+│   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
 │   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图

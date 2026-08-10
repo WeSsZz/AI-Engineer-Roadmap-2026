@@ -115,14 +115,17 @@ flowchart LR
     DS --> SA["Single Agent"]
     DS --> PE["Plan + Executor"]
     DS --> MA["Multi-Agent"]
+    DS --> AH["Adaptive Harness"]
     MP["Optional shared Model + Prompt Contract"] --> FW
     MP --> SA
     MP --> PE
     MP --> MA
+    MP --> AH
     FW --> ISO["Isolated Runtime + SQLite"]
     SA --> ISO
     PE --> ISO
     MA --> ISO
+    AH --> ISO
     ISO --> SC["Unified Scorer"]
     SC --> RP["JSON Report"]
 ```
