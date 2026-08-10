@@ -70,6 +70,8 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 
 模型只在 Metrics、Logs、Runbook 已交叉验证的正样本上综合答案；健康或缺证据 case 不调用模型。评测从不授予审批，也不调用 `create_ticket`。默认上限为 16 个模型调用、50,000 total tokens 和 0.10 美元估算成本，可用 `--max-model-calls`、`--max-total-tokens`、`--max-estimated-cost-usd` 收紧。预算在一个完整 case 的所有策略执行完后检查，以保留策略间配对公平性，因此 token/成本可能最多超出一个 case 的实际消耗。
 
+CLI 在每个 run 开始和结束时向 `stderr` 实时输出进度，并立即 flush；完成行包含累计模型调用、token、估算成本和 wall-clock 时间。收到 `Ctrl+C` 后，Runner 会关闭当前 Runtime、保留已经完成的 runs、写出 partial report，并以 `stop_reason: user_interrupt` 和退出码 130 明确区分用户中断与失败。模型预算达到上限后，只跳过后续需要模型的正样本；不调用模型的负样本仍继续执行，以免安全拒答指标被预算调度系统性漏采样。
+
 报告 schema v2 包含 prompt 与非敏感运行配置的 SHA-256 指纹、价格快照和提前停止原因；不包含 API key、完整 prompt、原始响应或 reasoning content。DeepSeek V4 Flash 的价格快照来自[官方价格页](https://api-docs.deepseek.com/quick_start/pricing)，缓存是 best-effort，命中行为应结合[上下文缓存说明](https://api-docs.deepseek.com/guides/kv_cache)解释。
 
 ## 当前结果边界

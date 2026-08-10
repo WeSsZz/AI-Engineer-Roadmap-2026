@@ -4,12 +4,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from enterprise_agent.benchmark import (
     BenchmarkBudget,
     BenchmarkRunner,
     DEEPSEEK_PRICING,
     ModelBenchmarkConfig,
+    STRATEGIES,
     default_cases,
 )
 from enterprise_agent.llm import DeepSeekProvider, LLMConfig
@@ -146,6 +148,63 @@ class ModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(complete["completed_run_count"], complete["planned_run_count"])
         self.assertFalse(complete["budget"]["stopped_early"])
         self.assertIsNone(complete["budget"]["stop_reason"])
+
+    def test_zero_model_cases_continue_after_model_budget_is_exhausted(self) -> None:
+        positive = default_cases()[0]
+        healthy = next(case for case in default_cases() if case.case_id == "order-api-healthy")
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            report = BenchmarkRunner(
+                cases=(positive, healthy),
+                strategy_names=("single_agent",),
+                model_config=_model_config(),
+                budget=BenchmarkBudget(
+                    max_model_calls=1,
+                    max_total_tokens=10_000,
+                    max_estimated_cost_usd=1.0,
+                ),
+            ).run(repetitions=2, workspace=directory, progress_callback=events.append)
+        self.assertEqual(report["planned_run_count"], 4)
+        self.assertEqual(report["completed_run_count"], 3)
+        self.assertEqual(sum(row["case_id"] == healthy.case_id for row in report["runs"]), 2)
+        self.assertEqual(report["budget"]["stop_reason"], "max_model_calls")
+        skipped = [event for event in events if event.event == "skipped"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0].case_id, positive.case_id)
+
+    def test_progress_reports_started_and_completed_totals(self) -> None:
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            BenchmarkRunner(
+                cases=(default_cases()[0],),
+                strategy_names=("single_agent",),
+                model_config=_model_config(),
+            ).run(workspace=directory, progress_callback=events.append)
+        self.assertEqual([event.event for event in events], ["started", "completed"])
+        self.assertEqual(events[0].run_index, 1)
+        self.assertEqual(events[1].completed_run_count, 1)
+        self.assertEqual(events[1].model_calls, 1)
+        self.assertEqual(events[1].total_tokens, 200)
+
+    def test_keyboard_interrupt_returns_a_partial_report(self) -> None:
+        class InterruptingStrategy:
+            def __init__(self, model_config=None) -> None:
+                pass
+
+            def run(self, case, workspace):
+                raise KeyboardInterrupt
+
+        events = []
+        with patch.dict(STRATEGIES, {"interrupting": InterruptingStrategy}):
+            with tempfile.TemporaryDirectory() as directory:
+                report = BenchmarkRunner(
+                    cases=(default_cases()[0],),
+                    strategy_names=("interrupting",),
+                ).run(workspace=directory, progress_callback=events.append)
+        self.assertEqual(report["completed_run_count"], 0)
+        self.assertTrue(report["budget"]["stopped_early"])
+        self.assertEqual(report["budget"]["stop_reason"], "user_interrupt")
+        self.assertEqual(events[-1].event, "interrupted")
 
     def test_budget_values_must_be_positive(self) -> None:
         with self.assertRaises(ValueError):

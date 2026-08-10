@@ -8,6 +8,7 @@ build/
 .env
 .env.*
 !.env.example
+work/
 work/*.db
 work/*.db-shm
 work/*.db-wal

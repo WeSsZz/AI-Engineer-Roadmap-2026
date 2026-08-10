@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
-from .benchmark import BenchmarkBudget, BenchmarkRunner, ModelBenchmarkConfig, STRATEGIES, write_report
+from .benchmark import (
+    BenchmarkBudget,
+    BenchmarkProgress,
+    BenchmarkRunner,
+    ModelBenchmarkConfig,
+    STRATEGIES,
+    write_report,
+)
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .llm import DeepSeekProvider, LLMConfig, LLMConfigurationError, LLMError, LLMProvider
@@ -126,6 +134,7 @@ def main() -> None:
             ).run(
                 repetitions=args.repetitions,
                 workspace=args.workspace,
+                progress_callback=_print_benchmark_progress,
             )
         except (LLMConfigurationError, ValueError) as exc:
             parser.error(str(exc))
@@ -144,6 +153,8 @@ def main() -> None:
                 indent=2,
             )
         )
+        if report["budget"]["stop_reason"] == "user_interrupt":
+            raise SystemExit(130)
         return
     if args.command == "model-smoke":
         try:
@@ -215,6 +226,27 @@ def _add_llm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--llm-provider", choices=("deterministic", "deepseek"), default="deterministic")
     parser.add_argument("--model", choices=("deepseek-v4-flash", "deepseek-v4-pro"))
     parser.add_argument("--thinking", choices=("enabled", "disabled"))
+
+
+def _print_benchmark_progress(progress: BenchmarkProgress) -> None:
+    prefix = f"[benchmark {progress.run_index}/{progress.planned_run_count}]"
+    target = f"r{progress.repetition}/{progress.repetitions} {progress.strategy}/{progress.case_id}"
+    if progress.event == "started":
+        message = f"{prefix} starting {target}"
+    elif progress.event == "completed":
+        message = (
+            f"{prefix} completed {target} status={progress.status} "
+            f"model_calls={progress.model_calls} tokens={progress.total_tokens} "
+            f"cost=${progress.estimated_cost_usd:.6f} elapsed={progress.elapsed_seconds:.1f}s"
+        )
+    elif progress.event == "skipped":
+        message = f"{prefix} skipped {target} reason={progress.reason}"
+    else:
+        message = (
+            f"{prefix} interrupted {target}; saving partial report "
+            f"completed={progress.completed_run_count} elapsed={progress.elapsed_seconds:.1f}s"
+        )
+    print(message, file=sys.stderr, flush=True)
 
 
 def _build_llm_provider(args: argparse.Namespace) -> LLMProvider | None:

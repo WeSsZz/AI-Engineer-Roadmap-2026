@@ -129,6 +129,8 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 
 Benchmark 不传递审批 token，也不执行 `create_ticket`；预算在完整 case 边界检查。报告只保存非敏感配置指纹，不保存 API key、完整 prompt 或原始响应。
 
+执行期间会实时输出当前 repetition、strategy、case、累计模型调用、token、成本和耗时。按 `Ctrl+C` 会保存已经完成的 runs 到指定报告，标记 `stop_reason: user_interrupt`，并以状态码 130 退出。模型预算耗尽后，系统会跳过后续需要模型的正样本，但仍完成健康或证据不足等零模型 case。
+
 运行测试：
 
 ```bash

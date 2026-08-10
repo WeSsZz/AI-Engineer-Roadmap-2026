@@ -111,6 +111,24 @@ class BenchmarkBudget:
 
 
 @dataclass(frozen=True)
+class BenchmarkProgress:
+    event: str
+    run_index: int
+    planned_run_count: int
+    repetition: int
+    repetitions: int
+    case_id: str
+    strategy: str
+    completed_run_count: int
+    model_calls: int
+    total_tokens: int
+    estimated_cost_usd: float
+    elapsed_seconds: float
+    status: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class BenchmarkCase:
     case_id: str
     objective: str
@@ -625,7 +643,13 @@ class BenchmarkRunner:
         if unknown:
             raise ValueError(f"Unknown benchmark strategies: {', '.join(unknown)}")
 
-    def run(self, *, repetitions: int = 1, workspace: str | Path | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        repetitions: int = 1,
+        workspace: str | Path | None = None,
+        progress_callback: Callable[[BenchmarkProgress], None] | None = None,
+    ) -> dict[str, Any]:
         if repetitions <= 0:
             raise ValueError("repetitions must be positive")
         owns_workspace = workspace is None
@@ -634,28 +658,136 @@ class BenchmarkRunner:
         root.mkdir(parents=True, exist_ok=True)
         outcomes: list[StrategyOutcome] = []
         stop_reason: str | None = None
+        planned_run_count = repetitions * len(self.cases) * len(self.strategy_names)
+        benchmark_started = time.monotonic()
+        current = (0, "", "", 0)
         try:
             for repetition in range(repetitions):
-                for case in self.cases:
-                    if self.model_config is not None:
+                for case_index, case in enumerate(self.cases):
+                    skip_reason: str | None = None
+                    if self.model_config is not None and case.expected_root_cause is not None:
+                        skip_reason = self._budget_stop_reason(outcomes)
                         remaining_calls = self.budget.max_model_calls - sum(item.model_calls for item in outcomes)
-                        calls_needed = len(self.strategy_names) if case.expected_root_cause is not None else 0
+                        calls_needed = len(self.strategy_names)
                         if remaining_calls < calls_needed:
-                            stop_reason = "max_model_calls"
-                            break
-                    for strategy_name in self.strategy_names:
+                            skip_reason = skip_reason or "max_model_calls"
+                    if skip_reason:
+                        stop_reason = stop_reason or skip_reason
+                        for strategy_index, strategy_name in enumerate(self.strategy_names):
+                            run_index = self._run_index(repetition, case_index, strategy_index)
+                            self._emit_progress(
+                                progress_callback,
+                                "skipped",
+                                run_index,
+                                planned_run_count,
+                                repetition,
+                                repetitions,
+                                case.case_id,
+                                strategy_name,
+                                outcomes,
+                                benchmark_started,
+                                reason=skip_reason,
+                            )
+                        continue
+                    for strategy_index, strategy_name in enumerate(self.strategy_names):
+                        run_index = self._run_index(repetition, case_index, strategy_index)
+                        current = (repetition, case.case_id, strategy_name, run_index)
+                        self._emit_progress(
+                            progress_callback,
+                            "started",
+                            run_index,
+                            planned_run_count,
+                            repetition,
+                            repetitions,
+                            case.case_id,
+                            strategy_name,
+                            outcomes,
+                            benchmark_started,
+                        )
                         run_directory = root / f"r{repetition}-{case.case_id}-{strategy_name}"
                         run_directory.mkdir(parents=True, exist_ok=True)
-                        outcomes.append(STRATEGIES[strategy_name](self.model_config).run(case, run_directory))
-                    stop_reason = self._budget_stop_reason(outcomes)
-                    if stop_reason:
-                        break
-                if stop_reason:
-                    break
+                        outcome = STRATEGIES[strategy_name](self.model_config).run(case, run_directory)
+                        outcomes.append(outcome)
+                        self._emit_progress(
+                            progress_callback,
+                            "completed",
+                            run_index,
+                            planned_run_count,
+                            repetition,
+                            repetitions,
+                            case.case_id,
+                            strategy_name,
+                            outcomes,
+                            benchmark_started,
+                            status=outcome.status,
+                        )
+                    stop_reason = stop_reason or self._budget_stop_reason(outcomes)
+        except KeyboardInterrupt:
+            stop_reason = "user_interrupt"
+            repetition, case_id, strategy_name, run_index = current
+            self._emit_progress(
+                progress_callback,
+                "interrupted",
+                run_index,
+                planned_run_count,
+                repetition,
+                repetitions,
+                case_id,
+                strategy_name,
+                outcomes,
+                benchmark_started,
+                reason=stop_reason,
+            )
         finally:
             if temporary is not None:
                 temporary.cleanup()
         return self._report(outcomes, repetitions, stop_reason)
+
+    def _run_index(self, repetition: int, case_index: int, strategy_index: int) -> int:
+        runs_per_repetition = len(self.cases) * len(self.strategy_names)
+        return (
+            repetition * runs_per_repetition
+            + case_index * len(self.strategy_names)
+            + strategy_index
+            + 1
+        )
+
+    @staticmethod
+    def _emit_progress(
+        callback: Callable[[BenchmarkProgress], None] | None,
+        event: str,
+        run_index: int,
+        planned_run_count: int,
+        repetition: int,
+        repetitions: int,
+        case_id: str,
+        strategy: str,
+        outcomes: list[StrategyOutcome],
+        benchmark_started: float,
+        *,
+        status: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        if callback is None:
+            return
+        callback(
+            BenchmarkProgress(
+                event=event,
+                run_index=run_index,
+                planned_run_count=planned_run_count,
+                repetition=repetition + 1,
+                repetitions=repetitions,
+                case_id=case_id,
+                strategy=strategy,
+                completed_run_count=len(outcomes),
+                model_calls=sum(item.model_calls for item in outcomes),
+                total_tokens=sum(item.total_tokens for item in outcomes),
+                estimated_cost_usd=sum(item.estimated_cost_usd for item in outcomes),
+                elapsed_seconds=time.monotonic() - benchmark_started,
+                status=status,
+                reason=reason,
+            )
+        )
 
     def _report(
         self,
