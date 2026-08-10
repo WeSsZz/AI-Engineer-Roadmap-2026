@@ -46,6 +46,7 @@
 - Benchmark v2.1 交叉平衡执行顺序，并输出成对差异与 Bootstrap 95% 置信区间
 - 生产 Runtime 支持 `fixed_multi`、`adaptive_shadow`、`adaptive` 三种持久化编排模式
 - Adaptive Router 决策进入 checkpoint、Event Log 和 Trace；信号缺失时 fail-closed 到完整验证链路
+- 安全拒答使用一等终态 `safely_refused`，不与依赖、模型合约或 Runtime 故障混为 `failed`
 
 当前演示任务：
 
@@ -171,14 +172,16 @@ CREATED
   -> RUNNING_SPECIALISTS
   -> VERIFYING
   -> SYNTHESIZING
-  -> WAITING_APPROVAL
-  -> EXECUTING_ACTION
-  -> COMPLETED
+       -> SAFELY_REFUSED
+       -> COMPLETED
+       -> WAITING_APPROVAL
+          -> EXECUTING_ACTION
+          -> COMPLETED
 
 任意非终态 -> FAILED / CANCELLED
 ```
 
-每个阶段完成后先写 checkpoint，再进入下一阶段。因此服务重启后，已经完成并持久化的 Specialist 不会重复执行。
+`SAFELY_REFUSED`、`COMPLETED`、`FAILED` 和 `CANCELLED` 都是终态。每个阶段完成后先写 checkpoint，再进入下一阶段，因此服务重启后，已经完成并持久化的 Specialist 不会重复执行。
 
 ## 目录
 

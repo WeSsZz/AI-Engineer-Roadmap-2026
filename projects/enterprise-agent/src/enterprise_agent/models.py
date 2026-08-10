@@ -18,6 +18,7 @@ class TaskStatus(str, Enum):
     WAITING_APPROVAL = "needs_approval"
     EXECUTING_ACTION = "executing_action"
     COMPLETED = "completed"
+    SAFELY_REFUSED = "safely_refused"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

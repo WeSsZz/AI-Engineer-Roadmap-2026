@@ -73,6 +73,7 @@ flowchart TD
 - 写操作必须绑定具体 `action_id` 和人工审批。
 - 写工具携带持久化 idempotency key，应对副作用成功但响应丢失。
 - Snapshot 用于快速恢复，append-only Event Log 用于审计和解释。
+- 安全拒答是独立终态，不计入任务失败；数据源、模型合约和 Runtime 故障继续进入 `FAILED`。
 
 详细语义见 [`docs/durable-runtime.md`](docs/durable-runtime.md)。
 

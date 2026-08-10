@@ -16,7 +16,8 @@ OBJECTIVE = "诊断 payment-api 错误率和延迟突增的根因，并生成故
 class IncidentResponseTests(unittest.TestCase):
     def test_adaptive_active_triages_healthy_incident_with_metrics_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = SQLiteEventStore(Path(directory) / "agent.db")
+            database = Path(directory) / "agent.db"
+            store = SQLiteEventStore(database)
             with EnterpriseAgentHarness(store=store) as harness:
                 result = harness.run(
                     "检查 order-api 告警是否构成事故，并在必要时生成故障工单",
@@ -24,15 +25,28 @@ class IncidentResponseTests(unittest.TestCase):
                     orchestration="adaptive",
                 )
                 tool_names = [record.tool_name for record in harness.runtime.invocations]
+            with EnterpriseAgentHarness(store=SQLiteEventStore(database)) as resumed_harness:
+                resumed = resumed_harness.resume(result.task.task_id)
+                resumed_tools = list(resumed_harness.runtime.invocations)
+            runtime_span = next(
+                span for span in store.list_spans(result.task.task_id) if span.name == "runtime.run"
+            )
         self.assertEqual(tool_names, ["query_service_metrics"])
         self.assertEqual(result.task.metadata["orchestration"], "adaptive")
-        self.assertEqual(result.state.status, TaskStatus.FAILED)
+        self.assertEqual(result.state.status, TaskStatus.SAFELY_REFUSED)
         self.assertEqual(result.state.artifacts["outcome_class"], "safe_refusal")
+        self.assertIn("未达到事故阈值", result.answer)
+        self.assertIn("保持监控", result.recommendation)
         decision = result.state.artifacts["routing_decision"]
         self.assertEqual(decision["selected_route"], "single_agent_triage")
         self.assertEqual(decision["actual_route"], "single_agent_triage")
         self.assertFalse(decision["shadow"])
         self.assertNotIn("pending_action", result.state.artifacts)
+        self.assertEqual(resumed.state.status, TaskStatus.SAFELY_REFUSED)
+        self.assertEqual(resumed_tools, [])
+        self.assertEqual(runtime_span.status, SpanStatus.COMPLETED)
+        self.assertEqual(runtime_span.attributes["final_status"], "safely_refused")
+        self.assertEqual(runtime_span.attributes["outcome_class"], "safe_refusal")
 
     def test_adaptive_active_escalates_anomaly_and_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -87,6 +101,8 @@ class IncidentResponseTests(unittest.TestCase):
         self.assertEqual(decision["actual_route"], "fixed_multi_agent")
         self.assertTrue(decision["shadow"])
         self.assertTrue(decision["would_reduce_specialists"])
+        self.assertEqual(result.state.status, TaskStatus.SAFELY_REFUSED)
+        self.assertEqual(result.state.artifacts["outcome_class"], "safe_refusal")
 
     def test_adaptive_router_fails_closed_when_metrics_are_unavailable(self) -> None:
         injector = FaultInjector((FaultRule("query_service_metrics", "permanent"),))
@@ -109,7 +125,7 @@ class IncidentResponseTests(unittest.TestCase):
             {"query_service_metrics", "search_logs", "get_runbook"},
         )
         self.assertEqual(result.state.status, TaskStatus.FAILED)
-        self.assertEqual(result.state.artifacts["outcome_class"], "safe_refusal")
+        self.assertEqual(result.state.artifacts["outcome_class"], "execution_failure")
         self.assertNotIn("pending_action", result.state.artifacts)
 
     def test_adaptive_resume_reuses_checkpointed_routing_decision(self) -> None:
@@ -192,6 +208,7 @@ class IncidentResponseTests(unittest.TestCase):
                 result = harness.run(OBJECTIVE, scenario="incident")
 
             self.assertEqual(result.state.status, TaskStatus.FAILED)
+            self.assertEqual(result.state.artifacts["outcome_class"], "execution_failure")
             self.assertEqual(result.state.artifacts["root_cause_confidence"], "insufficient")
             self.assertNotIn("pending_action", result.state.artifacts)
             log_result = next(item for item in result.agent_results if item.agent_name == "log_investigator")

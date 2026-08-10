@@ -12,19 +12,28 @@ _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.RUNNING_SPECIALISTS: frozenset({TaskStatus.VERIFYING, TaskStatus.FAILED, TaskStatus.CANCELLED}),
     TaskStatus.VERIFYING: frozenset({TaskStatus.SYNTHESIZING, TaskStatus.FAILED, TaskStatus.CANCELLED}),
     TaskStatus.SYNTHESIZING: frozenset(
-        {TaskStatus.WAITING_APPROVAL, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        {
+            TaskStatus.WAITING_APPROVAL,
+            TaskStatus.COMPLETED,
+            TaskStatus.SAFELY_REFUSED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
     TaskStatus.WAITING_APPROVAL: frozenset(
         {TaskStatus.EXECUTING_ACTION, TaskStatus.FAILED, TaskStatus.CANCELLED}
     ),
     TaskStatus.EXECUTING_ACTION: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}),
     TaskStatus.COMPLETED: frozenset(),
+    TaskStatus.SAFELY_REFUSED: frozenset(),
     TaskStatus.FAILED: frozenset(),
     TaskStatus.CANCELLED: frozenset(),
 }
 
 
-TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED})
+TERMINAL_STATUSES = frozenset(
+    {TaskStatus.COMPLETED, TaskStatus.SAFELY_REFUSED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+)
 
 
 def transition(state: TaskState, target: TaskStatus) -> None:

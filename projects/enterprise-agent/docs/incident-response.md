@@ -23,7 +23,7 @@ Runbook Researcher   -> approved diagnosis and remediation steps
 - 日志出现 `DB_POOL_TIMEOUT`、`POOL_SATURATED` 和 `HTTP_503`；
 - Runbook 明确覆盖 database pool exhaustion。
 
-只有上述证据经过 Verifier 检查后，Synthesis 才把根因置信度标记为 `high` 并准备故障工单。任一关键数据源永久失败时，任务进入 `failed`，置信度为 `insufficient`，且不生成待审批动作。
+只有上述证据经过 Verifier 检查后，Synthesis 才把根因置信度标记为 `high` 并准备故障工单。明确健康时任务进入 `safely_refused`；任一关键数据源永久失败时任务进入 `failed`。两者置信度均为 `insufficient` 且不生成待审批动作，但任务级 SLO 可以区分预期拒答与依赖故障。
 
 ## 自适应编排
 

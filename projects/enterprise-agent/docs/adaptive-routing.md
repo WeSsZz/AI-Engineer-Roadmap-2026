@@ -40,4 +40,4 @@ Active 的首要门槛应是 false downgrade 为 0；延迟和成本改善是次
 
 ## 可观测字段
 
-CLI 结果返回 `orchestration`、`routing_decision` 和 `outcome_class`。Trace 中 Runtime Span 带 orchestration 和 outcome class，Router Span 带 route、reason、risk score、shadow 与 fail-closed。`outcome_class` 区分 `success`、`awaiting_approval`、`safe_refusal`、`model_contract_failure` 和 `execution_failure`，让任务级 SLO 能将安全拒答与基础设施故障分开统计。
+CLI 结果返回 `orchestration`、`routing_decision` 和 `outcome_class`。Trace 中 Runtime Span 带 orchestration 和 outcome class，Router Span 带 route、reason、risk score、shadow 与 fail-closed。安全拒答同时使用终态 `safely_refused` 和 outcome class `safe_refusal`；依赖故障、模型合约违规和 Runtime 异常保留 `failed`，并分别标记 `execution_failure` 或 `model_contract_failure`。旧数据库中已经完成的 `failed + safe_refusal` 快照保持原样，只有新运行采用新终态，以保留历史审计真实性。

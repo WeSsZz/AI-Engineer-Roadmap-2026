@@ -354,8 +354,14 @@ class IncidentSynthesisAgent:
                 recommendation = "按 Runbook 暂停非必要批处理，检查慢查询和最近发布；经值班负责人审批后扩容或回滚。"
             confidence = "high"
         else:
-            answer = "运维证据未通过交叉验证，系统不会给出确定性根因或自动处置。"
-            recommendation = "修复失败的数据源或补齐 Metrics、Logs、Runbook 证据后重新诊断。"
+            healthy_triage = bool(metrics and metrics.data.get("anomalous") is False)
+            if healthy_triage:
+                service = metrics.data["service"]
+                answer = f"{service} 当前指标未达到事故阈值，系统不会生成事故根因或处置工单。"
+                recommendation = "保持监控；若错误率、P95 延迟或资源饱和度持续升高，再启动完整事故诊断。"
+            else:
+                answer = "运维证据未通过交叉验证，系统不会给出确定性根因或自动处置。"
+                recommendation = "修复失败的数据源或补齐 Metrics、Logs、Runbook 证据后重新诊断。"
             confidence = "insufficient"
         state.completed_steps.append("incident_synthesis")
         state.artifacts["answer"] = answer

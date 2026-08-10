@@ -32,7 +32,8 @@ Runtime 根据持久化状态选择下一步：
 - `SYNTHESIZING`：直接使用已保存的验证结果
 - `WAITING_APPROVAL`：返回待审批动作，不执行写工具
 - `EXECUTING_ACTION`：检查持久化审批与 `action_id`，然后安全重试写工具
-- 终态：直接返回存储结果，不执行任何阶段
+- `SAFELY_REFUSED`：返回持久化的安全拒答，不重跑工具或模型
+- 其他终态：直接返回存储结果，不执行任何阶段
 
 如果进程在只读 Specialist 执行中、但 checkpoint 前中断，该阶段可能重新执行。它被限制为只读操作，因此采用 at-least-once 语义是安全的。
 
@@ -59,6 +60,7 @@ Demo 工单系统使用 SQLite 唯一约束实现幂等。如果进程在工单�
 - 高风险动作没有匹配审批时不能执行。
 - Demo 写工具在崩溃恢复后不会创建重复工单。
 - Adaptive 路由决定与任务状态一起 checkpoint，并写入 Event Log 和 Trace。
+- 健康或证据确实不足使用 `safely_refused`；依赖失败、模型合约违规和 Runtime 异常仍使用 `failed`。
 
 ## 尚未保证
 

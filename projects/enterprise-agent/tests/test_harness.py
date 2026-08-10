@@ -116,6 +116,12 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(InvalidStateTransition):
             transition(state, TaskStatus.COMPLETED)
 
+    def test_safe_refusal_is_a_terminal_state(self) -> None:
+        state = TaskState("task-refused", status=TaskStatus.SYNTHESIZING)
+        transition(state, TaskStatus.SAFELY_REFUSED)
+        with self.assertRaises(InvalidStateTransition):
+            transition(state, TaskStatus.COMPLETED)
+
     def test_adaptive_orchestration_rejects_non_incident_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with EnterpriseAgentHarness(

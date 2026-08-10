@@ -286,8 +286,8 @@ class EnterpriseAgentHarness:
                             trace_parent_id=span.span_id,
                         )
                         span.set_attribute("result_status", synthesis.status)
-                        # A guarded refusal is valid runtime behavior, while still
-                        # counting as an unsuccessful agent operation for SLOs.
+                        # The agent contract did not produce a conclusion. The task-level
+                        # outcome is classified separately as refusal or execution failure.
                         if synthesis.status == "failed":
                             span.mark_error("AgentResultFailed")
                     execution.agent_results.append(synthesis)
@@ -298,12 +298,13 @@ class EnterpriseAgentHarness:
                         {"status": synthesis.status, "summary": synthesis.summary},
                     )
                     if synthesis.status == "failed":
-                        execution.state.artifacts["outcome_class"] = (
-                            "model_contract_failure"
-                            if execution.state.artifacts.get("model_error")
-                            else "safe_refusal"
+                        outcome_class = self._classify_unsuccessful_synthesis(execution)
+                        execution.state.artifacts["outcome_class"] = outcome_class
+                        target = (
+                            TaskStatus.SAFELY_REFUSED
+                            if outcome_class == "safe_refusal"
+                            else TaskStatus.FAILED
                         )
-                        target = TaskStatus.FAILED
                     elif synthesis.next_action == "prepare_ticket":
                         is_incident = execution.task.metadata.get("scenario") == "incident"
                         service = "order-api" if "order-api" in execution.task.objective.lower() else "payment-api"
@@ -325,8 +326,16 @@ class EnterpriseAgentHarness:
                     self._emit(execution, "state_transition", "supervisor", {"to": target.value})
                     self._checkpoint(execution)
                     self._interrupt_if_requested(execution, failpoint, "after_synthesis")
-                    if target == TaskStatus.COMPLETED:
-                        self._emit(execution, "task_finished", "supervisor", {"status": target.value})
+                    if target in {TaskStatus.COMPLETED, TaskStatus.SAFELY_REFUSED}:
+                        self._emit(
+                            execution,
+                            "task_finished",
+                            "supervisor",
+                            {
+                                "status": target.value,
+                                "outcome_class": execution.state.artifacts["outcome_class"],
+                            },
+                        )
                         self._checkpoint(execution)
                     continue
 
@@ -381,6 +390,14 @@ class EnterpriseAgentHarness:
             )
             self._checkpoint(execution)
         return self._result(execution)
+
+    @staticmethod
+    def _classify_unsuccessful_synthesis(execution: StoredExecution) -> str:
+        if execution.state.artifacts.get("model_error"):
+            return "model_contract_failure"
+        if any(result.data.get("error_type") for result in execution.agent_results):
+            return "execution_failure"
+        return "safe_refusal"
 
     def _run_specialists(
         self,

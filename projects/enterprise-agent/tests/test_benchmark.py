@@ -36,6 +36,13 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(adaptive["unnecessary_escalation_rate"], 0.0)
         self.assertEqual(fixed_multi["route_accuracy"], 0.8)
         self.assertEqual(fixed_multi["unnecessary_escalation_rate"], 1.0)
+        healthy_multi = next(
+            row
+            for row in report["runs"]
+            if row["strategy"] == "multi_agent" and row["case_id"] == "order-api-healthy"
+        )
+        self.assertEqual(healthy_multi["status"], "safely_refused")
+        self.assertEqual(healthy_multi["normalized_status"], "safely_refused")
 
     def test_adaptive_harness_routes_healthy_and_incident_cases_differently(self) -> None:
         positive = default_cases()[0]
@@ -60,6 +67,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(rows[healthy.case_id]["route"], "single_agent_triage")
         self.assertEqual(rows[healthy.case_id]["tool_attempts"], 1)
         self.assertEqual(rows[healthy.case_id]["normalized_status"], "safely_refused")
+        self.assertEqual(rows[healthy.case_id]["outcome_class"], "safe_refusal")
         by_name = {span.name: span for span in spans}
         root = by_name["strategy.adaptive_harness"]
         self.assertEqual(by_name["agent.risk_router"].parent_span_id, root.span_id)

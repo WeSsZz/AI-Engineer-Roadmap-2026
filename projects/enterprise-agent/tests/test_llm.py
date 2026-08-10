@@ -184,6 +184,7 @@ class ModelSynthesisTests(unittest.TestCase):
             ) as harness:
                 result = harness.run(OBJECTIVE, scenario="incident")
         self.assertEqual(result.state.status, TaskStatus.FAILED)
+        self.assertEqual(result.state.artifacts["outcome_class"], "execution_failure")
         self.assertEqual(calls, 0)
         self.assertIsNone(result.state.artifacts["model_call"])
 
