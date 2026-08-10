@@ -22,8 +22,10 @@ flowchart TD
     U["用户任务"] --> R["Durable Task Runtime"]
     R --> S["Supervisor"]
     S --> M["Metrics Investigator"]
-    S --> L["Log Investigator"]
-    S --> K["Runbook Researcher"]
+    M --> AR{"Adaptive Risk Router"}
+    AR -->|"健康"| V
+    AR -->|"异常或信号缺失"| L["Log Investigator"]
+    AR -->|"异常或信号缺失"| K["Runbook Researcher"]
     M --> V["Verifier"]
     L --> V
     K --> V
@@ -51,6 +53,7 @@ flowchart TD
 | 模块 | 职责 | 不负责 |
 | --- | --- | --- |
 | Runtime | 状态推进、checkpoint、resume、失败终止 | 业务领域推理 |
+| Risk Router | 根据已验证的结构化指标选择 triage 或完整验证链路 | 绕过 Verifier、审批或工具策略 |
 | Agent | 决策、分析、验证和合成 | 直接持久化共享状态 |
 | Context | 模型可见上下文、压缩视图、token 预算 | 删除原始事件 |
 | Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
@@ -65,6 +68,7 @@ flowchart TD
 ## 恢复原则
 
 - 已写入 checkpoint 的阶段不重复执行。
+- 编排模式和路由决定是任务快照的一部分；恢复时不重新解释 CLI 或重新路由。
 - checkpoint 前中断的只读阶段允许 at-least-once 重跑。
 - 写操作必须绑定具体 `action_id` 和人工审批。
 - 写工具携带持久化 idempotency key，应对副作用成功但响应丢失。
@@ -94,6 +98,7 @@ Allowlist
 runtime.run / runtime.resume
   ├── agent.metrics_investigator
   │     └── tool.query_service_metrics
+  ├── agent.risk_router
   ├── agent.log_investigator
   │     └── tool.search_logs
   ├── agent.runbook_researcher

@@ -14,6 +14,135 @@ OBJECTIVE = "诊断 payment-api 错误率和延迟突增的根因，并生成故
 
 
 class IncidentResponseTests(unittest.TestCase):
+    def test_adaptive_active_triages_healthy_incident_with_metrics_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteEventStore(Path(directory) / "agent.db")
+            with EnterpriseAgentHarness(store=store) as harness:
+                result = harness.run(
+                    "检查 order-api 告警是否构成事故，并在必要时生成故障工单",
+                    scenario="incident",
+                    orchestration="adaptive",
+                )
+                tool_names = [record.tool_name for record in harness.runtime.invocations]
+        self.assertEqual(tool_names, ["query_service_metrics"])
+        self.assertEqual(result.task.metadata["orchestration"], "adaptive")
+        self.assertEqual(result.state.status, TaskStatus.FAILED)
+        self.assertEqual(result.state.artifacts["outcome_class"], "safe_refusal")
+        decision = result.state.artifacts["routing_decision"]
+        self.assertEqual(decision["selected_route"], "single_agent_triage")
+        self.assertEqual(decision["actual_route"], "single_agent_triage")
+        self.assertFalse(decision["shadow"])
+        self.assertNotIn("pending_action", result.state.artifacts)
+
+    def test_adaptive_active_escalates_anomaly_and_requires_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteEventStore(Path(directory) / "agent.db")
+            with EnterpriseAgentHarness(store=store) as harness:
+                result = harness.run(
+                    OBJECTIVE,
+                    scenario="incident",
+                    orchestration="adaptive",
+                )
+                tool_names = [record.tool_name for record in harness.runtime.invocations]
+            router_span = next(
+                span
+                for span in store.list_spans(result.task.task_id)
+                if span.name == "agent.risk_router"
+            )
+            runtime_span = next(
+                span
+                for span in store.list_spans(result.task.task_id)
+                if span.name == "runtime.run"
+            )
+        self.assertEqual(result.state.status, TaskStatus.WAITING_APPROVAL)
+        self.assertEqual(result.state.artifacts["outcome_class"], "awaiting_approval")
+        self.assertEqual(
+            set(tool_names),
+            {"query_service_metrics", "search_logs", "get_runbook"},
+        )
+        decision = result.state.artifacts["routing_decision"]
+        self.assertEqual(decision["selected_route"], "verified_multi_agent")
+        self.assertEqual(decision["reason"], "high_risk_anomaly_with_write_intent")
+        self.assertTrue(any(event.event_type == "routing_decision" for event in result.events))
+        self.assertEqual(router_span.attributes["risk_score"], 3)
+        self.assertEqual(runtime_span.attributes["outcome_class"], "awaiting_approval")
+
+    def test_shadow_mode_records_decision_but_keeps_fixed_multi_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with EnterpriseAgentHarness(
+                store=SQLiteEventStore(Path(directory) / "agent.db")
+            ) as harness:
+                result = harness.run(
+                    "检查 order-api 告警是否构成事故，并在必要时生成故障工单",
+                    scenario="incident",
+                    orchestration="adaptive_shadow",
+                )
+                tool_names = [record.tool_name for record in harness.runtime.invocations]
+        self.assertEqual(
+            set(tool_names),
+            {"query_service_metrics", "search_logs", "get_runbook"},
+        )
+        decision = result.state.artifacts["routing_decision"]
+        self.assertEqual(decision["selected_route"], "single_agent_triage")
+        self.assertEqual(decision["actual_route"], "fixed_multi_agent")
+        self.assertTrue(decision["shadow"])
+        self.assertTrue(decision["would_reduce_specialists"])
+
+    def test_adaptive_router_fails_closed_when_metrics_are_unavailable(self) -> None:
+        injector = FaultInjector((FaultRule("query_service_metrics", "permanent"),))
+        with tempfile.TemporaryDirectory() as directory:
+            with EnterpriseAgentHarness(
+                store=SQLiteEventStore(Path(directory) / "agent.db"),
+                fault_injector=injector,
+            ) as harness:
+                result = harness.run(
+                    OBJECTIVE,
+                    scenario="incident",
+                    orchestration="adaptive",
+                )
+                tool_names = [record.tool_name for record in harness.runtime.invocations]
+        decision = result.state.artifacts["routing_decision"]
+        self.assertEqual(decision["selected_route"], "verified_multi_agent")
+        self.assertTrue(decision["fail_closed"])
+        self.assertEqual(
+            set(tool_names),
+            {"query_service_metrics", "search_logs", "get_runbook"},
+        )
+        self.assertEqual(result.state.status, TaskStatus.FAILED)
+        self.assertEqual(result.state.artifacts["outcome_class"], "safe_refusal")
+        self.assertNotIn("pending_action", result.state.artifacts)
+
+    def test_adaptive_resume_reuses_checkpointed_routing_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "agent.db"
+            with EnterpriseAgentHarness(store=SQLiteEventStore(database)) as harness:
+                with self.assertRaises(SimulatedInterruption) as interrupted:
+                    harness.run(
+                        OBJECTIVE,
+                        scenario="incident",
+                        orchestration="adaptive",
+                        failpoint="after_routing_decision",
+                    )
+            checkpoint = SQLiteEventStore(database).load(interrupted.exception.task_id)
+            self.assertEqual(checkpoint.state.status, TaskStatus.RUNNING_SPECIALISTS)
+            self.assertEqual(
+                checkpoint.state.artifacts["routing_decision"]["selected_route"],
+                "verified_multi_agent",
+            )
+            with EnterpriseAgentHarness(store=SQLiteEventStore(database)) as harness:
+                result = harness.resume(interrupted.exception.task_id)
+                resumed_tools = [record.tool_name for record in harness.runtime.invocations]
+            self.assertEqual(set(resumed_tools), {"search_logs", "get_runbook"})
+            self.assertEqual(result.state.status, TaskStatus.WAITING_APPROVAL)
+            metric_events = [
+                event
+                for event in result.events
+                if event.event_type == "agent_completed" and event.actor == "metrics_investigator"
+            ]
+            routing_events = [event for event in result.events if event.event_type == "routing_decision"]
+            self.assertEqual(len(metric_events), 1)
+            self.assertEqual(len(routing_events), 1)
+
     def test_three_specialists_cross_validate_incident_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteEventStore(Path(directory) / "agent.db")

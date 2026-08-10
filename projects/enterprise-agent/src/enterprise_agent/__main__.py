@@ -15,6 +15,7 @@ from .benchmark import (
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .llm import DeepSeekProvider, LLMConfig, LLMConfigurationError, LLMError, LLMProvider
+from .routing import ORCHESTRATION_MODES
 from .store import SQLiteEventStore
 
 
@@ -32,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--trace", action="store_true", help="Print the complete event trace")
     run_parser.add_argument("--failpoint", help="Interrupt after a checkpoint for recovery testing")
     run_parser.add_argument("--scenario", choices=("business", "incident"))
+    run_parser.add_argument(
+        "--orchestration",
+        choices=ORCHESTRATION_MODES,
+        default="fixed_multi",
+    )
     _add_llm_arguments(run_parser)
     run_parser.add_argument(
         "--inject-fault",
@@ -88,6 +94,9 @@ def print_result(result: TaskRunResult, include_trace: bool) -> None:
         "ticket": result.state.artifacts.get("ticket"),
         "context_compacted": result.context_compacted,
         "root_cause_confidence": result.state.artifacts.get("root_cause_confidence"),
+        "orchestration": result.task.metadata.get("orchestration", "fixed_multi"),
+        "routing_decision": result.state.artifacts.get("routing_decision"),
+        "outcome_class": result.state.artifacts.get("outcome_class"),
         "model_call": result.state.artifacts.get("model_call"),
         "model_error": result.state.artifacts.get("model_error"),
     }
@@ -208,6 +217,7 @@ def main() -> None:
                 approval_token=approval_token,
                 failpoint=args.failpoint,
                 scenario=args.scenario,
+                orchestration=args.orchestration,
             )
         else:
             result = harness.resume(

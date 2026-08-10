@@ -36,6 +36,8 @@ Runtime 根据持久化状态选择下一步：
 
 如果进程在只读 Specialist 执行中、但 checkpoint 前中断，该阶段可能重新执行。它被限制为只读操作，因此采用 at-least-once 语义是安全的。
 
+Adaptive 模式在 Metrics 结果后立即持久化 `routing_decision`，再执行后续 Specialist。若此时中断，`resume` 会复用原决定和已完成的 Metrics 结果，不会重新路由，也不会重复 Metrics 调用。旧任务没有编排元数据时按 `fixed_multi` 恢复，保持向后兼容。
+
 ## 写操作幂等
 
 审批绑定一个在合成阶段就已固定的 `pending_action.action_id`。Action Executor 必须同时满足：
@@ -56,6 +58,7 @@ Demo 工单系统使用 SQLite 唯一约束实现幂等。如果进程在工单�
 - 并发 checkpoint 使用版本比较，过期 Worker 会失败。
 - 高风险动作没有匹配审批时不能执行。
 - Demo 写工具在崩溃恢复后不会创建重复工单。
+- Adaptive 路由决定与任务状态一起 checkpoint，并写入 Event Log 和 Trace。
 
 ## 尚未保证
 

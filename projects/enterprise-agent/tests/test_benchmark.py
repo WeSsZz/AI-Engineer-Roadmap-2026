@@ -12,6 +12,7 @@ from enterprise_agent.benchmark import (
     default_cases,
     write_report,
 )
+from enterprise_agent.faults import FaultRule
 from enterprise_agent.store import SQLiteEventStore
 
 
@@ -27,6 +28,14 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(aggregate["run_count"], 5)
             self.assertEqual(aggregate["task_success_rate"], 1.0)
             self.assertEqual(aggregate["retry_recovery_rate"], 1.0)
+        adaptive = report["aggregates"]["adaptive_harness"]
+        fixed_multi = report["aggregates"]["multi_agent"]
+        self.assertEqual(adaptive["route_accuracy"], 1.0)
+        self.assertEqual(adaptive["escalation_recall"], 1.0)
+        self.assertEqual(adaptive["false_downgrade_rate"], 0.0)
+        self.assertEqual(adaptive["unnecessary_escalation_rate"], 0.0)
+        self.assertEqual(fixed_multi["route_accuracy"], 0.8)
+        self.assertEqual(fixed_multi["unnecessary_escalation_rate"], 1.0)
 
     def test_adaptive_harness_routes_healthy_and_incident_cases_differently(self) -> None:
         positive = default_cases()[0]
@@ -57,6 +66,29 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(by_name["agent.log_investigator"].parent_span_id, root.span_id)
         self.assertEqual(by_name["agent.runbook_researcher"].parent_span_id, root.span_id)
         self.assertEqual(by_name["agent.verifier"].parent_span_id, root.span_id)
+
+    def test_adaptive_benchmark_fails_closed_to_full_investigation(self) -> None:
+        baseline = default_cases()[0]
+        case = BenchmarkCase(
+            "metrics-permanent",
+            baseline.objective,
+            baseline.service,
+            baseline.expected_root_cause,
+            baseline.expected_evidence_types,
+            baseline.expected_tools,
+            (FaultRule("query_service_metrics", "permanent"),),
+            expected_route="verified_multi_agent",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            report = BenchmarkRunner(
+                cases=(case,),
+                strategy_names=("adaptive_harness",),
+            ).run(workspace=directory)
+        run = report["runs"][0]
+        self.assertEqual(run["route"], "verified_multi_agent")
+        self.assertEqual(run["routing_reason"], "routing_signal_unavailable_fail_closed")
+        self.assertEqual(run["tool_attempts"], 3)
+        self.assertEqual(run["outcome_class"], "execution_failure")
 
     def test_counterbalanced_order_rotates_strategy_position(self) -> None:
         case = default_cases()[0]

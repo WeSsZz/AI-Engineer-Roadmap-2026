@@ -43,6 +43,9 @@
 - Model latency：每个模型 attempt 的总耗时、均值和总体标准差。
 - Estimated cost：按报告内固定的价格快照估算，不等同于账单。
 - Prediction consistency：同一策略、同一 case 重复运行时，众数预测所占比例。
+- Route accuracy：Router 选择是否符合 case 标注的期望路线。
+- Escalation recall / false downgrade：应完整验证的 case 是否被升级，以及被错误降级的比例；这是 Active 上线的安全门槛。
+- Unnecessary escalation：健康 case 被送入完整验证链路的比例，用于衡量可节省的开销。
 - Paired comparison：按 case + repetition 配对，报告候选策略相对 Single-Agent 的成功率、延迟、工具、token 和成本差。
 - Bootstrap 95% CI：对成对平均延迟差进行固定种子的非参数重采样；小样本区间只用于暴露不确定性，不替代扩大数据集。
 
@@ -86,6 +89,8 @@ CLI 在每个 run 开始和结束时向 `stderr` 实时输出进度，并立即 
 
 Adaptive Harness 的 Router 先读取 Metrics：低于事故阈值时走 `single_agent_triage` 并安全拒答；高风险异常走 `verified_multi_agent`，并行调查 Logs/Runbook，经过 Verifier 后才允许模型综合。每次选择同时写入 route、routing reason 和 Span attributes。
 
+Benchmark 与生产 Runtime 共用 `IncidentRiskRouter`，避免离线策略和线上策略漂移。报告同时保留 `expected_route`、`evaluated_route`、`route_correct`、`false_downgrade` 和 `unnecessary_escalation`，可直接形成 Shadow 流量的路由混淆矩阵。
+
 ## 当前结果边界
 
-已提交的 v1 报告 [`benchmarks/incident-diagnosis-v1.json`](../benchmarks/incident-diagnosis-v1.json) 来自 5 cases × 5 repetitions。所有策略的正确性指标均为 1.0，说明数据集目前太小且规则化，不能区分推理质量。Model-backed v2 管线已由 mock transport 回归测试覆盖；真实模型结果必须单独运行并保留报告，不能用 mock 数字声称模型效果。
+已提交的 v1 报告 [`benchmarks/incident-diagnosis-v1.json`](../benchmarks/incident-diagnosis-v1.json) 来自 5 cases × 5 repetitions。所有策略的正确性指标均为 1.0，说明数据集目前太小且规则化，不能区分推理质量。真实 Model-backed v2.1 的 30/30 runs 同样达到 1.0 质量指标；Adaptive 相对 Single-Agent 的成对延迟差置信区间跨过 0，因此当前证据支持 Shadow 灰度和安全性验证，不支持宣称显著性能提升。

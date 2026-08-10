@@ -12,6 +12,13 @@ from enterprise_agent import __main__ as cli
 
 
 class CLITests(unittest.TestCase):
+    def test_run_parser_exposes_adaptive_and_shadow_orchestration(self) -> None:
+        parser = cli.build_parser()
+        active = parser.parse_args(["run", "--orchestration", "adaptive"])
+        shadow = parser.parse_args(["run", "--orchestration", "adaptive_shadow"])
+        self.assertEqual(active.orchestration, "adaptive")
+        self.assertEqual(shadow.orchestration, "adaptive_shadow")
+
     def test_benchmark_does_not_initialize_the_task_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "benchmark.json"

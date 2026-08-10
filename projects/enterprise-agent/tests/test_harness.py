@@ -116,6 +116,18 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(InvalidStateTransition):
             transition(state, TaskStatus.COMPLETED)
 
+    def test_adaptive_orchestration_rejects_non_incident_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with EnterpriseAgentHarness(
+                store=SQLiteEventStore(Path(directory) / "agent.db")
+            ) as harness:
+                with self.assertRaises(ValueError):
+                    harness.run(
+                        "分析华东区域订单下降原因",
+                        scenario="business",
+                        orchestration="adaptive",
+                    )
+
     def test_checkpoint_uses_optimistic_concurrency(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteEventStore(Path(directory) / "agent.db")

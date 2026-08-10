@@ -75,7 +75,9 @@
 
 当前已接入 DeepSeek V4 Flash Provider 与 Model-backed Benchmark v2，但已提交的基准仍标记为 `deterministic_synthetic_no_llm`。2026-08-10 的单次真实 smoke 为 67 tokens / 1562 ms，单次事故综合为 553 tokens / 2998 ms，且审批恢复没有重复调用模型；这些数字只用于验证调用、usage 和恢复链路。在重复运行并保存 v2 报告前，不把 mock 测试或单样本数字写成模型效果、方差或成本结论。
 
-2026-08-10 的 2 repetitions × Single-Agent/Multi-Agent Model-backed 报告完成 20/20 runs、12 次模型调用，Schema 合规率与任务成功率均为 1.0，总估算成本约 0.000785 美元。由于当时策略执行顺序固定且样本量仅为 2，该结果只作为 v2 基线；v2.1 已增加交叉平衡顺序、成对差异和 Bootstrap 区间，并加入 Adaptive Harness，下一次真实实验应使用新方法。
+2026-08-10 的 2 repetitions × Single-Agent/Multi-Agent Model-backed 报告完成 20/20 runs、12 次模型调用，Schema 合规率与任务成功率均为 1.0，总估算成本约 0.000785 美元。由于当时策略执行顺序固定且样本量仅为 2，该结果只作为 v2 基线。
+
+同日 v2.1 使用交叉平衡顺序运行 Single-Agent、Multi-Agent、Adaptive Harness，完成 30/30 runs、18 次模型调用、11,136 tokens，估算成本 0.001187 美元。三种策略的任务成功率、根因准确率、安全拒答率、证据完整性和 Schema 合规率均为 1.0。Adaptive 的工具 Precision 为 0.933、平均 attempts 为 3.0；Multi-Agent 分别为 0.800 和 3.4。Adaptive 相对 Single-Agent 的全部 case 平均延迟差为 +18.1ms，Bootstrap 95% CI 为 [-222.5, 241.0]ms；模型 case 为 +28.7ms，CI 为 [-387.5, 390.4]ms，无法判定存在稳定延迟优势。路由分布为 triage 2 次、完整验证 8 次。结论：可进入 Shadow，但小样本不能支持直接全量 Active 或泛化质量声明。
 
 ## Tool Gateway 实验
 

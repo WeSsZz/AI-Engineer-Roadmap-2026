@@ -44,6 +44,8 @@
 - 模型调用数、总 token 和估算成本三重预算，防止评测失控
 - Adaptive Harness 根据指标风险在单 Agent triage 和多 Specialist 验证之间做可审计升级
 - Benchmark v2.1 交叉平衡执行顺序，并输出成对差异与 Bootstrap 95% 置信区间
+- 生产 Runtime 支持 `fixed_multi`、`adaptive_shadow`、`adaptive` 三种持久化编排模式
+- Adaptive Router 决策进入 checkpoint、Event Log 和 Trace；信号缺失时 fail-closed 到完整验证链路
 
 当前演示任务：
 
@@ -82,6 +84,26 @@ PYTHONPATH=src python -m enterprise_agent \
 ```
 
 模型当前只综合已经通过 Verifier 的证据；它不能直接调用企业写工具、授予审批或扩展 evidence allowlist。默认仍为 `deterministic`，因此普通测试和默认 benchmark 不需要密钥。
+
+先以 Shadow 模式验证 Adaptive Router，不改变实际 Specialist 调度：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent \
+  --db work/adaptive-shadow.db run \
+  --scenario incident \
+  --orchestration adaptive_shadow
+```
+
+确认路由准确率和安全指标后启用 Active 模式：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent \
+  --db work/adaptive-active.db run \
+  --scenario incident \
+  --orchestration adaptive
+```
+
+Active 模式先运行 Metrics Investigator。健康信号走 `single_agent_triage`；事故信号或指标不可用走 `verified_multi_agent`。`resume TASK_ID` 会读取任务中已持久化的模式和路由决定，无需再次传参。默认仍是 `fixed_multi`。
 
 默认停在 `needs_approval`，输出包含 `task_id` 和已经固定的 `pending_action`。审批并恢复：
 
@@ -169,6 +191,7 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
+│   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
 │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
 │   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
@@ -189,6 +212,7 @@ enterprise-agent/
 - [`docs/tool-gateway.md`](docs/tool-gateway.md)：可靠工具调用与错误处理语义
 - [`docs/observability.md`](docs/observability.md)：持久化 Trace、Span 层级与延迟指标
 - [`docs/incident-response.md`](docs/incident-response.md)：运维证据链、故障注入与安全处置
+- [`docs/adaptive-routing.md`](docs/adaptive-routing.md)：Shadow/Active 路由、恢复语义与上线门槛
 - [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
 - [`docs/model-provider.md`](docs/model-provider.md)：DeepSeek 配置、结构化契约和失败语义
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
@@ -203,8 +227,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 用真实 DeepSeek 重复运行 Benchmark v2，并扩充保留集和语义评分。
-2. Dense + BM25 + Rerank 检索链路。
-3. Worker lease、取消传播和分布式任务抢占。
-4. OpenTelemetry exporter、跨服务 trace context 和指标后端。
-5. Prometheus、Loki/OpenSearch、Runbook Registry 的真实适配器。
+1. 用真实 Shadow 流量统计路由混淆矩阵，满足门槛后灰度启用 Active。
+2. 扩充开发集/保留集和语义评分，避免小型合成数据集过拟合。
+3. Dense + BM25 + Rerank 检索链路。
+4. Worker lease、取消传播和分布式任务抢占。
+5. OpenTelemetry exporter 与真实 Prometheus、Loki/OpenSearch、Runbook 适配器。

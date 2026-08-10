@@ -25,6 +25,18 @@ Runbook Researcher   -> approved diagnosis and remediation steps
 
 只有上述证据经过 Verifier 检查后，Synthesis 才把根因置信度标记为 `high` 并准备故障工单。任一关键数据源永久失败时，任务进入 `failed`，置信度为 `insufficient`，且不生成待审批动作。
 
+## 自适应编排
+
+Runtime 支持三种模式：
+
+| 模式 | Router | 实际执行 |
+| --- | --- | --- |
+| `fixed_multi` | 不运行 | 始终执行 Metrics、Logs、Runbook |
+| `adaptive_shadow` | 记录建议 | 仍执行完整 Multi-Agent 链路 |
+| `adaptive` | 记录并执行 | 健康信号只做 Metrics triage；其余执行完整链路 |
+
+当前 `incident-risk-v1` 使用结构化 Metrics 结果，不让模型自由决定是否省略安全检查。异常信号且任务含写意图时风险分为 3，进入 `verified_multi_agent`；健康信号进入 `single_agent_triage`；Metrics 失败或字段缺失时 fail-closed，仍执行 Logs、Runbook 和 Verifier。任何路线都不能绕过写操作审批。
+
 ## 故障注入
 
 Fault Injector 位于工具 provider adapter 内侧，因此请求仍然经过 allowlist、schema、timeout、retry、circuit breaker 和 Trace。支持：

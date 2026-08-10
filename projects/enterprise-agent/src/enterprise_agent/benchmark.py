@@ -24,6 +24,7 @@ from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness
 from .llm import DeepSeekProvider, LLMCallRecord, LLMConfig, LLMProvider
 from .models import AgentResult, Evidence, SpanKind, TaskEnvelope, TaskState
+from .routing import IncidentRiskRouter
 from .store import SQLiteEventStore
 from .tool_gateway import ToolError, ToolOutput, ToolRuntime
 from .tools import build_demo_runtime
@@ -140,6 +141,7 @@ class BenchmarkCase:
     expected_tools: tuple[str, ...]
     fault_rules: tuple[FaultRule, ...] = ()
     recoverable_fault: bool = False
+    expected_route: str | None = None
 
 
 @dataclass
@@ -189,6 +191,7 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
             "database_pool_exhaustion",
             ("service_metrics", "log_query", "runbook"),
             ("query_service_metrics", "search_logs", "get_runbook"),
+            expected_route="verified_multi_agent",
         ),
         BenchmarkCase(
             "payment-metrics-transient",
@@ -199,6 +202,7 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
             ("query_service_metrics", "search_logs", "get_runbook"),
             (FaultRule("query_service_metrics", "transient"),),
             True,
+            "verified_multi_agent",
         ),
         BenchmarkCase(
             "payment-runbook-timeout",
@@ -209,6 +213,7 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
             ("query_service_metrics", "search_logs", "get_runbook"),
             (FaultRule("get_runbook", "timeout", delay_seconds=0.08),),
             True,
+            "verified_multi_agent",
         ),
         BenchmarkCase(
             "payment-logs-permanent",
@@ -218,6 +223,7 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
             ("service_metrics",),
             ("query_service_metrics", "search_logs"),
             (FaultRule("search_logs", "permanent"),),
+            expected_route="verified_multi_agent",
         ),
         BenchmarkCase(
             "order-api-healthy",
@@ -226,6 +232,7 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
             None,
             ("service_metrics",),
             ("query_service_metrics",),
+            expected_route="single_agent_triage",
         ),
     )
 
@@ -568,12 +575,21 @@ class AdaptiveHarnessStrategy(_DirectStrategy):
         tracer: SQLiteTraceRecorder,
         provider: LLMProvider | None,
     ) -> StrategyOutcome:
+        routing_task = TaskEnvelope(
+            task_id=task_id,
+            objective=case.objective,
+            allowed_tools=INCIDENT_TOOLS,
+            metadata={"scenario": "incident"},
+        )
+        router_policy = IncidentRiskRouter()
         with tracer.start_span(
             trace_id=task_id,
             task_id=task_id,
             name="strategy.adaptive_harness",
             kind=SpanKind.RUNTIME,
         ) as root:
+            metrics: ToolOutput | None = None
+            routing_error: str | None = None
             try:
                 with tracer.start_span(
                     trace_id=task_id,
@@ -591,21 +607,23 @@ class AdaptiveHarnessStrategy(_DirectStrategy):
                     )
                     anomalous = bool(
                         metrics.data["error_rate"] >= 0.05
-                        and metrics.data["db_pool_utilization"] >= 0.90
+                        or metrics.data["p95_latency_ms"] >= 1000
                     )
-                    write_intent = "工单" in case.objective or "ticket" in case.objective.lower()
-                    risk_score = int(anomalous) * 2 + int(write_intent)
-                    router.set_attribute("anomalous", anomalous)
-                    router.set_attribute("write_intent", write_intent)
-                    router.set_attribute("risk_score", risk_score)
+                    metrics_result = AgentResult(
+                        "metrics_investigator",
+                        "completed" if anomalous else "failed",
+                        "benchmark routing metrics",
+                        data={**metrics.data, "anomalous": anomalous},
+                        evidence=list(metrics.evidence),
+                    )
+                    decision = router_policy.decide(routing_task, metrics_result)
+                    for key, value in decision.to_dict().items():
+                        router.set_attribute(key, value)
             except ToolError as exc:
-                outcome = self._outcome(case, task_id, [], None)
-                outcome.route = "single_agent_triage"
-                outcome.routing_reason = "metrics_unavailable"
-                outcome.error = f"{type(exc).__name__}: {exc}"
-                return outcome
+                decision = router_policy.decide(routing_task, None)
+                routing_error = f"{type(exc).__name__}: {exc}"
 
-            if not anomalous:
+            if decision.selected_route == "single_agent_triage":
                 root.set_attribute("selected_route", "single_agent_triage")
                 outcome = self._outcome(case, task_id, list(metrics.evidence), None)
                 outcome.route = "single_agent_triage"
@@ -613,13 +631,9 @@ class AdaptiveHarnessStrategy(_DirectStrategy):
                 return outcome
 
             root.set_attribute("selected_route", "verified_multi_agent")
-            routing_reason = (
-                "high_risk_anomaly_with_write_intent"
-                if write_intent
-                else "anomaly_requires_evidence_verification"
-            )
+            routing_reason = decision.reason
             outputs: dict[str, ToolOutput] = {}
-            errors: list[str] = []
+            errors: list[str] = [routing_error] if routing_error else []
 
             def investigate(
                 agent_name: str,
@@ -665,7 +679,7 @@ class AdaptiveHarnessStrategy(_DirectStrategy):
                     except ToolError as exc:
                         errors.append(f"{type(exc).__name__}: {exc}")
 
-            evidence = list(metrics.evidence)
+            evidence = list(metrics.evidence) if metrics is not None else []
             for key in ("logs", "runbook"):
                 if key in outputs:
                     evidence.extend(outputs[key].evidence)
@@ -717,7 +731,7 @@ class AdaptiveHarnessStrategy(_DirectStrategy):
                 )
             outcome.route = "verified_multi_agent"
             outcome.routing_reason = routing_reason
-            if outcome.root_cause is not None and write_intent:
+            if outcome.root_cause is not None and decision.write_intent:
                 outcome.status = "needs_approval"
             return outcome
 
@@ -1074,6 +1088,16 @@ class BenchmarkRunner:
         else:
             outcome_class = "execution_failure"
             normalized_status = "failed"
+        evaluated_route = {
+            "fixed_multi_agent": "verified_multi_agent",
+            "single_agent_triage": "single_agent_triage",
+            "verified_multi_agent": "verified_multi_agent",
+        }.get(outcome.route)
+        route_correct = (
+            evaluated_route == case.expected_route
+            if evaluated_route is not None and case.expected_route is not None
+            else None
+        )
         return {
             "strategy": outcome.strategy,
             "case_id": outcome.case_id,
@@ -1085,6 +1109,17 @@ class BenchmarkRunner:
             "outcome_class": outcome_class,
             "route": outcome.route,
             "routing_reason": outcome.routing_reason,
+            "expected_route": case.expected_route,
+            "evaluated_route": evaluated_route,
+            "route_correct": route_correct,
+            "false_downgrade": bool(
+                evaluated_route == "single_agent_triage"
+                and case.expected_route == "verified_multi_agent"
+            ) if route_correct is not None else None,
+            "unnecessary_escalation": bool(
+                evaluated_route == "verified_multi_agent"
+                and case.expected_route == "single_agent_triage"
+            ) if route_correct is not None else None,
             "predicted_root_cause": outcome.root_cause,
             "confidence": outcome.confidence,
             "success": success,
@@ -1117,6 +1152,9 @@ class BenchmarkRunner:
         latencies = sorted(row["latency_ms"] for row in rows)
         model_rows = [row for row in rows if row["model_calls"] > 0]
         schema_rows = [row for row in rows if row["model_schema_compliant"] is not None]
+        route_rows = [row for row in rows if row["route_correct"] is not None]
+        escalation_rows = [row for row in route_rows if row["expected_route"] == "verified_multi_agent"]
+        triage_rows = [row for row in route_rows if row["expected_route"] == "single_agent_triage"]
         cache_tokens = sum(row["prompt_cache_hit_tokens"] + row["prompt_cache_miss_tokens"] for row in rows)
         mean = lambda key: round(sum(float(row[key]) for row in rows) / len(rows), 4) if rows else 0.0
         route_distribution = {
@@ -1167,6 +1205,16 @@ class BenchmarkRunner:
             "prediction_consistency_rate": BenchmarkRunner._prediction_consistency(rows),
             "route_distribution": route_distribution,
             "outcome_distribution": outcome_distribution,
+            "route_accuracy": _boolean_rate(route_rows, "route_correct"),
+            "escalation_recall": round(
+                1 - sum(bool(row["false_downgrade"]) for row in escalation_rows) / len(escalation_rows),
+                4,
+            ) if escalation_rows else None,
+            "false_downgrade_rate": _boolean_rate(escalation_rows, "false_downgrade"),
+            "unnecessary_escalation_rate": _boolean_rate(
+                triage_rows,
+                "unnecessary_escalation",
+            ),
         }
 
     def _paired_comparisons(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1243,6 +1291,12 @@ def _mean(values: list[float | int], *, digits: int = 4) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), digits)
+
+
+def _boolean_rate(rows: list[dict[str, Any]], key: str) -> float | None:
+    if not rows:
+        return None
+    return round(sum(bool(row[key]) for row in rows) / len(rows), 4)
 
 
 def _bootstrap_mean_ci(values: list[float], *, samples: int = 2_000) -> list[float] | None:

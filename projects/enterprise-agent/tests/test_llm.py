@@ -164,6 +164,7 @@ class ModelSynthesisTests(unittest.TestCase):
         self.assertEqual(result.state.status, TaskStatus.FAILED)
         self.assertNotIn("pending_action", result.state.artifacts)
         self.assertIn("outside the verified evidence set", result.state.artifacts["model_error"])
+        self.assertEqual(result.state.artifacts["outcome_class"], "model_contract_failure")
 
     def test_failed_verifier_prevents_model_call(self) -> None:
         calls = 0
