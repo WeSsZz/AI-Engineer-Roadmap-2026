@@ -47,6 +47,8 @@
 - 生产 Runtime 支持 `fixed_multi`、`adaptive_shadow`、`adaptive` 三种持久化编排模式
 - Adaptive Router 决策进入 checkpoint、Event Log 和 Trace；信号缺失时 fail-closed 到完整验证链路
 - 安全拒答使用一等终态 `safely_refused`，不与依赖、模型合约或 Runtime 故障混为 `failed`
+- 正式定义 Task、Trial、Transcript、Outcome、Grader 与 EvaluationSuite 合同
+- Benchmark v3 报告 `pass@1`、连续可靠性 `pass^3`、全通过 case 比例和逐 case 稳定性
 
 当前演示任务：
 
@@ -196,6 +198,7 @@ enterprise-agent/
 │   ├── faults.py          # 确定性工具故障注入
 │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
 │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
+│   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
 │   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
@@ -230,8 +233,10 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 用真实 Shadow 流量统计路由混淆矩阵，满足门槛后灰度启用 Active。
-2. 扩充开发集/保留集和语义评分，避免小型合成数据集过拟合。
-3. Dense + BM25 + Rerank 检索链路。
-4. Worker lease、取消传播和分布式任务抢占。
-5. OpenTelemetry exporter 与真实 Prometheus、Loki/OpenSearch、Runbook 适配器。
+1. 增加版本化 suite loader，将 capability、regression、security、recovery 与 held-out 分离。
+2. 将 outcome、evidence、safety、recovery grader 解耦，并扩充到 20/60 条人工审核任务。
+3. 增加 PostgreSQL、Worker lease、heartbeat、deadline、取消传播和分布式抢占。
+4. 增加 OpenTelemetry exporter、离线 replay 和真实 Prometheus/Logs/Ticketing 适配器。
+5. 导出稳定 trajectory schema 与 evaluator hooks，但不在本项目实现 RL Trainer。
+
+完整升级边界、里程碑与停止条件见 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)。

@@ -20,6 +20,7 @@ from .agents import (
     IncidentSynthesisAgent,
 )
 from .context import ContextEngine
+from .evals import reliability_summary
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness
 from .llm import DeepSeekProvider, LLMCallRecord, LLMConfig, LLMProvider
@@ -1008,8 +1009,8 @@ class BenchmarkRunner:
         }
         paired_comparisons = self._paired_comparisons(run_rows)
         return {
-            "schema_version": 2,
-            "benchmark_version": "2.1",
+            "schema_version": 3,
+            "benchmark_version": "3.0",
             "dataset_version": DATASET_VERSION,
             "generated_at": datetime.now(UTC).isoformat(),
             "execution_mode": "model_backed" if self.model_config else "deterministic_synthetic_no_llm",
@@ -1165,6 +1166,7 @@ class BenchmarkRunner:
             outcome_class: sum(row["outcome_class"] == outcome_class for row in rows)
             for outcome_class in sorted({row["outcome_class"] for row in rows})
         }
+        reliability = reliability_summary(rows)
         return {
             "run_count": len(rows),
             "task_success_rate": mean("success"),
@@ -1203,6 +1205,7 @@ class BenchmarkRunner:
             ) if len(model_rows) > 1 else 0.0 if model_rows else None,
             "estimated_cost_usd": round(sum(row["estimated_cost_usd"] for row in rows), 9),
             "prediction_consistency_rate": BenchmarkRunner._prediction_consistency(rows),
+            **reliability,
             "route_distribution": route_distribution,
             "outcome_distribution": outcome_distribution,
             "route_accuracy": _boolean_rate(route_rows, "route_correct"),

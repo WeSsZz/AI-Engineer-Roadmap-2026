@@ -22,11 +22,14 @@ class BenchmarkTests(unittest.TestCase):
             report = BenchmarkRunner().run(workspace=directory)
         self.assertEqual(report["dataset_version"], "incident-diagnosis-v1")
         self.assertEqual(report["case_count"], 5)
-        self.assertEqual(report["benchmark_version"], "2.1")
+        self.assertEqual(report["benchmark_version"], "3.0")
         self.assertEqual(len(report["runs"]), 25)
         for aggregate in report["aggregates"].values():
             self.assertEqual(aggregate["run_count"], 5)
             self.assertEqual(aggregate["task_success_rate"], 1.0)
+            self.assertEqual(aggregate["pass_at_1"], 1.0)
+            self.assertIsNone(aggregate["pass_power_3"])
+            self.assertEqual(aggregate["fully_reliable_case_rate"], 1.0)
             self.assertEqual(aggregate["retry_recovery_rate"], 1.0)
         adaptive = report["aggregates"]["adaptive_harness"]
         fixed_multi = report["aggregates"]["multi_agent"]
@@ -181,7 +184,7 @@ class BenchmarkTests(unittest.TestCase):
             target = Path(directory) / "reports" / "benchmark.json"
             write_report(report, target)
             loaded = json.loads(target.read_text(encoding="utf-8"))
-        self.assertEqual(loaded["schema_version"], 2)
+        self.assertEqual(loaded["schema_version"], 3)
         self.assertEqual(loaded["execution_mode"], "deterministic_synthetic_no_llm")
         self.assertEqual(loaded["strategies"], ["single_agent"])
         self.assertEqual(len(loaded["runs"]), 1)

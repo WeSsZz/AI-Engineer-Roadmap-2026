@@ -77,7 +77,7 @@ class ModelBenchmarkTests(unittest.TestCase):
             trace_db = Path(directory) / f"r0-{case.case_id}-single_agent" / "trace.db"
             spans = SQLiteEventStore(trace_db).list_spans(direct_run["task_id"])
 
-        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["schema_version"], 3)
         self.assertEqual(report["execution_mode"], "model_backed")
         self.assertEqual(report["completed_run_count"], 5)
         self.assertNotIn("test-key", json.dumps(report))
