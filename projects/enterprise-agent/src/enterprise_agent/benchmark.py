@@ -34,8 +34,9 @@ from .tools import build_demo_runtime
 from .tracing import SQLiteTraceRecorder
 
 
-DATASET_VERSION = "incident-diagnosis-v1"
+DATASET_VERSION = "incident-diagnosis-v2"
 DEFAULT_SUITE_ROOT = Path(__file__).with_name("suites")
+DEFAULT_SUITE_SPLITS = ("development", "regression", "security", "recovery")
 INCIDENT_TOOLS = ("query_service_metrics", "search_logs", "get_runbook", "create_ticket")
 PRICING_SOURCE = "https://api-docs.deepseek.com/quick_start/pricing"
 
@@ -191,8 +192,10 @@ class BenchmarkStrategy(Protocol):
 
 
 def default_cases() -> tuple[BenchmarkCase, ...]:
-    cases = load_benchmark_cases(DEFAULT_SUITE_ROOT / "development") + load_benchmark_cases(
-        DEFAULT_SUITE_ROOT / "regression"
+    cases = tuple(
+        case
+        for split in DEFAULT_SUITE_SPLITS
+        for case in load_benchmark_cases(DEFAULT_SUITE_ROOT / split)
     )
     task_ids = [case.case_id for case in cases]
     if len(task_ids) != len(set(task_ids)):
@@ -211,6 +214,10 @@ def default_cases() -> tuple[BenchmarkCase, ...]:
                 "payment-runbook-timeout",
                 "payment-logs-permanent",
                 "order-api-healthy",
+                "checkout-db-pool",
+                "catalog-api-healthy",
+                "inventory-api-missing-logs",
+                "shipping-api-missing-runbook",
             )
         )
     }
@@ -1179,6 +1186,7 @@ class BenchmarkRunner:
             },
             artifacts={
                 "evidence_types": sorted(evidence_types),
+                "tool_names": list(outcome.tool_names),
                 "recovered": outcome.recovered,
                 "duplicate_side_effects": 0,
                 "policy_violations": [],

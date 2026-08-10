@@ -18,15 +18,9 @@
 
 ## 数据集
 
-`incident-diagnosis-v1` 包含五类 case：
+`incident-diagnosis-v2` 包含 20 条确定性合成 case：development 6、regression 4、security 4、recovery 4、held-out 2。它覆盖多个服务、健康告警、缺日志、缺 Runbook、永久数据源故障、单次/多次重试、超时恢复、直接/间接 Prompt Injection 和租户工具范围。
 
-1. payment-api 数据库连接池耗尽；
-2. Metrics 瞬时故障后恢复；
-3. Runbook 查询超时后恢复；
-4. Logs 永久失败，必须拒绝确定性根因和写操作；
-5. order-api 健康，必须安全拒绝事故结论。
-
-五条 case 已迁出 `benchmark.py`，位于 `src/enterprise_agent/suites/development` 与 `src/enterprise_agent/suites/regression`。每条任务声明 provenance、许可/敏感性、人工审核状态、expected outcome、required evidence、fault rules 和 recoverability，评分器不读取策略内部状态。`held-out` 是独立目录，默认 benchmark 不加载它。
+每条任务声明 provenance、许可/敏感性、人工审核状态、expected outcome、required evidence、fault rules 和 recoverability，评分器不读取策略内部状态。原有 5 条已标记人工审核；新增 15 条是待复核 synthetic draft，不能作为真实生产分布。默认 benchmark 运行前四个 split 的 18 条；`held-out` 的 2 条必须通过 `--suite` 显式运行，避免进入日常策略调试。
 
 suite 支持 JSON 和 JSONL，并使用 `schema_version: 1`。Loader 拒绝缺失字段、未知字段、非法 suite kind、重复 task ID 和不支持的 schema version。运行外部 suite：
 
@@ -112,4 +106,6 @@ Benchmark 与生产 Runtime 共用 `IncidentRiskRouter`，避免离线策略和�
 
 ## 当前结果边界
 
-已提交的 v1 报告 [`benchmarks/incident-diagnosis-v1.json`](../benchmarks/incident-diagnosis-v1.json) 来自 5 cases × 5 repetitions。所有策略的正确性指标均为 1.0，说明数据集目前太小且规则化，不能区分推理质量。真实 Model-backed v2.1 的 30/30 runs 同样达到 1.0 质量指标；Adaptive 相对 Single-Agent 的成对延迟差置信区间跨过 0，因此当前证据支持 Shadow 灰度和安全性验证，不支持宣称显著性能提升。
+确定性 v2 报告 [`benchmarks/incident-diagnosis-v2.json`](../benchmarks/incident-diagnosis-v2.json) 来自 18 个默认 case × 3 repetitions × 5 strategies，共 270 runs。Fixed Workflow 和固定 Multi-Agent 在 `admin-api-tenant-scope` 中读取了任务禁止的 Logs/Runbook，被 safety grader 硬失败，`pass@1` 与 `pass^3` 均为 0.9444；Single-Agent、Plan-Executor、Adaptive Harness 均为 1.0。Adaptive 的 route accuracy 为 1.0、false downgrade 与 unnecessary escalation 均为 0；固定 Multi-Agent 的 route accuracy 为 0.8333、unnecessary escalation 为 1.0。
+
+这只证明当前确定性策略在 synthetic contract 上的行为差异，不证明真实推理泛化能力。新增 15 条仍待人工复核，held-out 只有 2 条；延迟也只是同机相对数字。历史 v1 报告 [`benchmarks/incident-diagnosis-v1.json`](../benchmarks/incident-diagnosis-v1.json) 保留用于追溯。真实 Model-backed v2.1 的小样本结论同样不支持宣称显著性能提升。

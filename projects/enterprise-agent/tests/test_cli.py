@@ -46,7 +46,7 @@ class CLITests(unittest.TestCase):
 
     def test_interrupted_benchmark_writes_partial_report_and_exits_130(self) -> None:
         partial = {
-            "dataset_version": "incident-diagnosis-v1",
+            "dataset_version": "incident-diagnosis-v2",
             "benchmark_version": "4.0",
             "execution_mode": "model_backed",
             "execution_order": "counterbalanced",

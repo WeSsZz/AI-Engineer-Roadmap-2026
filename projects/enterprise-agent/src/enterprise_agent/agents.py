@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -29,8 +30,12 @@ def _tool_failure(agent_name: str, tool_name: str, error: ToolError) -> AgentRes
     )
 
 
-def _incident_service(task: TaskEnvelope) -> str:
-    return "order-api" if "order-api" in task.objective.lower() else "payment-api"
+def incident_service(task: TaskEnvelope) -> str:
+    configured = task.metadata.get("service")
+    if isinstance(configured, str) and configured:
+        return configured
+    match = re.search(r"\b[a-z0-9]+(?:-[a-z0-9]+)*-api\b", task.objective.lower())
+    return match.group(0) if match else "payment-api"
 
 
 class MetricsInvestigator:
@@ -44,7 +49,7 @@ class MetricsInvestigator:
         runtime: ToolRuntime,
         trace_parent_id: str | None = None,
     ) -> AgentResult:
-        service = _incident_service(task)
+        service = incident_service(task)
         try:
             result = runtime.invoke(
                 "query_service_metrics",
@@ -82,7 +87,7 @@ class LogInvestigator:
         runtime: ToolRuntime,
         trace_parent_id: str | None = None,
     ) -> AgentResult:
-        service = _incident_service(task)
+        service = incident_service(task)
         try:
             result = runtime.invoke(
                 "search_logs",
@@ -118,7 +123,7 @@ class RunbookResearcher:
         runtime: ToolRuntime,
         trace_parent_id: str | None = None,
     ) -> AgentResult:
-        service = _incident_service(task)
+        service = incident_service(task)
         try:
             result = runtime.invoke(
                 "get_runbook",

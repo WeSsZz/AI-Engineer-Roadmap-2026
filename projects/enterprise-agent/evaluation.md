@@ -4,9 +4,10 @@
 
 ## 数据集
 
-- 当前版本：`incident-diagnosis-v1`
-- 当前规模：5 个确定性合成 case，包含正常事故、瞬时故障、超时、永久故障和健康服务
-- 数据位置：development 2 条、regression 3 条；held-out 不进入默认 benchmark
+- 当前版本：`incident-diagnosis-v2`
+- 当前规模：20 个确定性合成 case；默认运行 18 条，held-out 2 条需显式选择
+- 数据位置：development 6、regression 4、security 4、recovery 4、held-out 2
+- 审核状态：原有 5 条已标记人工审核；新增 15 条 synthetic draft 待人工复核
 - 标注：期望根因、证据类型、工具集合、是否应安全拒绝、故障是否可恢复
 - 评分：Benchmark v4 独立运行 outcome、evidence、safety、recovery grader，并保存逐 dimension 结果
 - 当前用途：验证评测管线和 Agent Infra 语义，不代表真实生产泛化能力
@@ -67,6 +68,20 @@
 | R3 | Hybrid + Reranker |  |  |  |  |
 
 ## Agent 实验
+
+2026-08-11 确定性 v2：CPython 3.12.2、macOS arm64、18 cases × 3 repetitions × 5 strategies，共 270 runs。完整逐次结果见 [`benchmarks/incident-diagnosis-v2.json`](benchmarks/incident-diagnosis-v2.json)。
+
+| 方法 | `pass@1` | `pass^3` | 工具 Precision | P50 ms | P95 ms | 平均 attempts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fixed Workflow | 0.9444 | 0.9444 | 0.8704 | 1.078 | 86.072 | 3.2222 |
+| Single Agent | 1.0000 | 1.0000 | 1.0000 | 1.301 | 86.327 | 2.8333 |
+| Plan-Executor | 1.0000 | 1.0000 | 1.0000 | 1.699 | 86.844 | 2.8333 |
+| Multi-Agent | 0.9444 | 0.9444 | 0.8148 | 8.818 | 87.400 | 3.3889 |
+| Adaptive Harness | 1.0000 | 1.0000 | 0.9259 | 3.215 | 87.358 | 3.0556 |
+
+Fixed Workflow 与固定 Multi-Agent 的失败均来自 `admin-api-tenant-scope`：它们在健康指标之后继续读取任务明确禁止的 Logs/Runbook，因此 outcome/evidence 通过但 safety grader 硬失败。自适应三策略在 Metrics triage 后停止，没有越过租户工具范围。所有策略的 safe-refusal、evidence completeness 与 retry recovery 均为 1.0。
+
+该结果只验证 synthetic contract 与评测器能区分策略，不能视为真实生产泛化结论。新增 15 条尚未完成人工 reference review；held-out 规模也不足以支持调参外推。
 
 2026-08-10 本机基线：CPython 3.12.2、macOS arm64、5 cases × 5 repetitions。完整逐次结果见 [`benchmarks/incident-diagnosis-v1.json`](benchmarks/incident-diagnosis-v1.json)。
 

@@ -107,8 +107,8 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 - JSON/JSONL suite loader + Schema 校验（已完成）；
 - outcome、evidence、safety、recovery grader 独立实现（已完成）；
-- development/regression/held-out 目录与数据 provenance（5 条基线迁移已完成）；
-- 先扩至 20 条，再到 60 条。
+- development/regression/security/recovery/held-out 目录与数据 provenance（已完成）；
+- 20 条目录已完成：5 条已审核，15 条 synthetic draft 待人工复核；复核后再扩至 60 条。
 
 验收：新增 case 不改策略代码；每个失败能定位到 grader dimension。
 
@@ -171,7 +171,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 按优先级执行：
 
-1. 从 5 条扩至 20 条审核 case，覆盖 capability、regression、security、recovery 和小型 held-out；
-2. 为新 case 补充可区分策略的环境状态和失败模式，先消除“所有策略都是 1.0”的无区分评测；
-3. 至少重复运行 3 次并提交 Benchmark v4 报告，检查 `pass^3` 与 grader dimension 失败分布；
-4. 再开始 PostgreSQL + Worker lease，避免同时扩数据与改运行时导致问题难以归因。
+1. 人工复核 15 条 synthetic draft，必要时修正 reference outcome、工具范围与 provenance；
+2. 将 held-out 从 2 条扩至目标 5 条，并逐步把总审核集扩至 60 条；
+3. 基于已提交的 Benchmark v4 报告追踪 grader dimension 失败，不以 synthetic 1.0 宣称泛化；
+4. 数据合同稳定后开始 PostgreSQL + Worker lease，避免同时扩数据与改运行时导致问题难以归因。

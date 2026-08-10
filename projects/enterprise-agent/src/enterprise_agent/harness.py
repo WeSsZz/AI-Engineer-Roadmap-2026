@@ -14,6 +14,7 @@ from .agents import (
     RunbookResearcher,
     SynthesisAgent,
     Verifier,
+    incident_service,
 )
 from .context import ContextEngine
 from .faults import FaultInjector
@@ -307,7 +308,7 @@ class EnterpriseAgentHarness:
                         )
                     elif synthesis.next_action == "prepare_ticket":
                         is_incident = execution.task.metadata.get("scenario") == "incident"
-                        service = "order-api" if "order-api" in execution.task.objective.lower() else "payment-api"
+                        service = incident_service(execution.task)
                         execution.state.artifacts["pending_action"] = {
                             "action_id": f"{execution.task.task_id}:create_ticket:1",
                             "tool_name": "create_ticket",
@@ -591,7 +592,7 @@ class EnterpriseAgentHarness:
 
     @staticmethod
     def _detect_scenario(objective: str) -> str:
-        incident_terms = ("故障", "事故", "告警", "延迟", "错误率", "503", "payment-api", "order-api")
+        incident_terms = ("故障", "事故", "告警", "延迟", "错误率", "503", "-api")
         return "incident" if any(term in objective.lower() for term in incident_terms) else "business"
 
     @staticmethod

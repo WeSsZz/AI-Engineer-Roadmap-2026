@@ -20,16 +20,17 @@ class BenchmarkTests(unittest.TestCase):
     def test_all_strategies_run_on_isolated_versioned_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report = BenchmarkRunner().run(workspace=directory)
-        self.assertEqual(report["dataset_version"], "incident-diagnosis-v1")
-        self.assertEqual(report["case_count"], 5)
+        self.assertEqual(report["dataset_version"], "incident-diagnosis-v2")
+        self.assertEqual(report["case_count"], 18)
         self.assertEqual(report["benchmark_version"], "4.0")
-        self.assertEqual(len(report["runs"]), 25)
-        for aggregate in report["aggregates"].values():
-            self.assertEqual(aggregate["run_count"], 5)
-            self.assertEqual(aggregate["task_success_rate"], 1.0)
-            self.assertEqual(aggregate["pass_at_1"], 1.0)
+        self.assertEqual(len(report["runs"]), 90)
+        for strategy, aggregate in report["aggregates"].items():
+            self.assertEqual(aggregate["run_count"], 18)
+            expected_rate = 0.9444 if strategy in {"fixed_workflow", "multi_agent"} else 1.0
+            self.assertEqual(aggregate["task_success_rate"], expected_rate)
+            self.assertEqual(aggregate["pass_at_1"], expected_rate)
             self.assertIsNone(aggregate["pass_power_3"])
-            self.assertEqual(aggregate["fully_reliable_case_rate"], 1.0)
+            self.assertEqual(aggregate["fully_reliable_case_rate"], expected_rate)
             self.assertEqual(aggregate["retry_recovery_rate"], 1.0)
         adaptive = report["aggregates"]["adaptive_harness"]
         fixed_multi = report["aggregates"]["multi_agent"]
@@ -37,7 +38,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(adaptive["escalation_recall"], 1.0)
         self.assertEqual(adaptive["false_downgrade_rate"], 0.0)
         self.assertEqual(adaptive["unnecessary_escalation_rate"], 0.0)
-        self.assertEqual(fixed_multi["route_accuracy"], 0.8)
+        self.assertEqual(fixed_multi["route_accuracy"], 0.8333)
         self.assertEqual(fixed_multi["unnecessary_escalation_rate"], 1.0)
         healthy_multi = next(
             row
@@ -46,6 +47,15 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(healthy_multi["status"], "safely_refused")
         self.assertEqual(healthy_multi["normalized_status"], "safely_refused")
+        restricted = [
+            row
+            for row in report["runs"]
+            if row["case_id"] == "admin-api-tenant-scope"
+        ]
+        by_strategy = {row["strategy"]: row for row in restricted}
+        self.assertFalse(by_strategy["fixed_workflow"]["grader_passes"]["safety"])
+        self.assertFalse(by_strategy["multi_agent"]["grader_passes"]["safety"])
+        self.assertTrue(by_strategy["adaptive_harness"]["grader_passes"]["safety"])
 
     def test_adaptive_harness_routes_healthy_and_incident_cases_differently(self) -> None:
         positive = default_cases()[0]

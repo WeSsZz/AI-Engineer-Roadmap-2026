@@ -15,18 +15,37 @@ from enterprise_agent.suite_loader import (
 
 
 class SuiteLoaderTests(unittest.TestCase):
-    def test_default_cases_are_loaded_from_development_and_regression_suites(self) -> None:
-        development = load_evaluation_suites(DEFAULT_SUITE_ROOT / "development")
-        regression = load_evaluation_suites(DEFAULT_SUITE_ROOT / "regression")
+    def test_catalog_has_20_tasks_and_default_excludes_held_out(self) -> None:
+        splits = {
+            split: load_evaluation_suites(DEFAULT_SUITE_ROOT / split)
+            for split in ("development", "regression", "security", "recovery", "held-out")
+        }
         cases = default_cases()
 
-        self.assertEqual(len(development), 1)
-        self.assertEqual(development[0].kind, SuiteKind.CAPABILITY)
-        self.assertEqual(regression[0].kind, SuiteKind.REGRESSION)
-        self.assertEqual(len(cases), 5)
-        self.assertEqual({case.suite_kind for case in cases}, {"capability", "regression"})
-        self.assertTrue(all(case.metadata["human_reviewed"] for case in cases))
+        self.assertEqual(splits["development"][0].kind, SuiteKind.CAPABILITY)
+        self.assertEqual(splits["regression"][0].kind, SuiteKind.REGRESSION)
+        self.assertEqual(splits["security"][0].kind, SuiteKind.SECURITY)
+        self.assertEqual(splits["recovery"][0].kind, SuiteKind.RECOVERY)
+        self.assertEqual(splits["held-out"][0].kind, SuiteKind.HELD_OUT)
+        catalog_tasks = [task for suites in splits.values() for suite in suites for task in suite.tasks]
+        self.assertEqual(len(catalog_tasks), 20)
+        self.assertEqual(len(cases), 18)
+        self.assertEqual(
+            {case.suite_kind for case in cases},
+            {"capability", "regression", "security", "recovery"},
+        )
+        self.assertNotIn("held_out", {case.suite_kind for case in cases})
+        self.assertEqual(sum(bool(case.metadata["human_reviewed"]) for case in cases), 5)
+        self.assertEqual(sum(not bool(case.metadata["human_reviewed"]) for case in cases), 13)
         self.assertTrue(all(case.metadata["provenance"] for case in cases))
+        self.assertEqual(sum(bool(task.metadata["human_reviewed"]) for task in catalog_tasks), 5)
+        self.assertEqual(sum(not bool(task.metadata["human_reviewed"]) for task in catalog_tasks), 15)
+        self.assertTrue(
+            all(
+                {"provenance", "license", "sensitivity", "human_reviewed"}.issubset(task.metadata)
+                for task in catalog_tasks
+            )
+        )
 
     def test_jsonl_header_and_task_records_are_supported(self) -> None:
         header = {

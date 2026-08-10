@@ -50,7 +50,8 @@
 - 正式定义 Task、Trial、Transcript、Outcome、Grader 与 EvaluationSuite 合同
 - Benchmark v3 报告 `pass@1`、连续可靠性 `pass^3`、全通过 case 比例和逐 case 稳定性
 - JSON/JSONL suite loader 执行版本、字段类型、未知字段和跨 suite task ID 校验
-- 五条基线 case 已从策略代码迁入 development/regression 数据文件，held-out 保持独立空目录
+- `incident-diagnosis-v2` 包含 20 条分层 case：development 6、regression 4、security 4、recovery 4、held-out 2
+- 原有 5 条标记为人工审核；新增 15 条 synthetic draft 明确标记为待人工复核
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
 
 当前演示任务：
@@ -151,7 +152,7 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
   --output work/regression-report.json
 ```
 
-JSON suite 使用一个带 `tasks` 数组的对象；JSONL suite 使用一条 `record_type: suite` header，后接若干 `record_type: task` 记录。默认 benchmark 只加载 development 与 regression，不自动加载 held-out，避免保留集意外进入日常策略调试。
+JSON suite 使用一个带 `tasks` 数组的对象；JSONL suite 使用一条 `record_type: suite` header，后接若干 `record_type: task` 记录。默认 benchmark 加载 development、regression、security 与 recovery 共 18 条，不自动加载 2 条 held-out，避免保留集意外进入日常策略调试。
 
 用同一模型合约比较核心三种架构（会产生真实 API 费用）：
 
@@ -215,7 +216,7 @@ enterprise-agent/
  │   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
  │   ├── suite_loader.py    # JSON/JSONL suite 读取与版本化 Schema 校验
  │   ├── graders.py         # outcome/evidence/safety/recovery 独立 grader
- │   ├── suites/            # development/regression/held-out 版本化任务数据
+ │   ├── suites/            # development/regression/security/recovery/held-out 数据
  │   ├── llm.py             # DeepSeek/OpenAI-compatible JSON Provider 和调用记录
 │   ├── tools.py           # 企业工具实现与策略注册
 │   ├── context.py         # 上下文预算和压缩视图
@@ -250,8 +251,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 增加版本化 suite loader，将 capability、regression、security、recovery 与 held-out 分离。
-2. 将 outcome、evidence、safety、recovery grader 解耦，并扩充到 20/60 条人工审核任务。
+1. 人工复核新增 15 条 synthetic draft，冻结 reference outcome、权限边界和 provenance。
+2. 在不复制模板的前提下继续扩至 60 条审核任务。
 3. 增加 PostgreSQL、Worker lease、heartbeat、deadline、取消传播和分布式抢占。
 4. 增加 OpenTelemetry exporter、离线 replay 和真实 Prometheus/Logs/Ticketing 适配器。
 5. 导出稳定 trajectory schema 与 evaluator hooks，但不在本项目实现 RL Trainer。
