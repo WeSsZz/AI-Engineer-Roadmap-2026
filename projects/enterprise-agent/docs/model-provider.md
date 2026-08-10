@@ -25,7 +25,7 @@ PYTHONPATH=src python -m enterprise_agent \
   --thinking disabled
 ```
 
-默认关闭 thinking，以便第一次集成时控制延迟和输出行为；可通过 `--thinking enabled` 开启。无 `--llm-provider deepseek` 时继续使用确定性综合，现有测试和 benchmark 不调用外网。
+默认关闭 thinking，以便第一次集成时控制延迟和输出行为；可通过 `--thinking enabled` 开启。无 `--llm-provider deepseek` 时继续使用确定性综合，测试和默认 benchmark 不调用外网；显式为 benchmark 选择 DeepSeek 时会执行真实模型请求。
 
 ## 结构化输出契约
 
@@ -51,4 +51,4 @@ Provider 设置 `response_format={"type":"json_object"}`，并按照官方要求
 
 ## 当前验证边界
 
-Provider、重试、结构化解析、安全拒绝、证据防幻觉和 Model Trace 已通过 mock transport 测试。当前开发环境没有 `DEEPSEEK_API_KEY`，因此尚未声称完成真实线上调用；配置密钥后应先运行 `model-smoke`，再执行一条不带 `--approve` 的事故诊断任务。
+Provider、重试、结构化解析、安全拒绝、证据防幻觉和 Model Trace 已通过 mock transport 测试。2026-08-10 用户 shell 已完成一次真实 smoke 和一次不带审批的事故诊断：V4 Flash 返回结构化答案，任务停在 `needs_approval`，模型综合使用 553 tokens、约 2998 ms；恢复审批时没有重复模型调用。该单次结果只证明链路可达，不代表稳定性或模型质量结论。

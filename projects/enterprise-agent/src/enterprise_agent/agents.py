@@ -10,6 +10,15 @@ from .models import AgentResult, Evidence, TaskEnvelope, TaskState
 from .tools import ToolError, ToolRuntime
 
 
+INCIDENT_SYNTHESIS_PROMPT_VERSION = "incident-synthesis-v1"
+INCIDENT_SYNTHESIS_SYSTEM_PROMPT = (
+    "You are an enterprise incident synthesis agent. Return only a JSON object. "
+    "Never invent evidence or claim an action was executed. Required JSON schema: "
+    '{"root_cause":"database_pool_exhaustion","confidence":"high",'
+    '"answer":"string","recommendation":"string","evidence_refs":["string"]}.'
+)
+
+
 def _tool_failure(agent_name: str, tool_name: str, error: ToolError) -> AgentResult:
     return AgentResult(
         agent_name=agent_name,
@@ -315,12 +324,7 @@ class IncidentSynthesisAgent:
         if correlated and self.llm_provider is not None:
             try:
                 response = self.llm_provider.complete_json(
-                    system_prompt=(
-                        "You are an enterprise incident synthesis agent. Return only a JSON object. "
-                        "Never invent evidence or claim an action was executed. Required JSON schema: "
-                        '{"root_cause":"database_pool_exhaustion","confidence":"high",'
-                        '"answer":"string","recommendation":"string","evidence_refs":["string"]}.'
-                    ),
+                    system_prompt=INCIDENT_SYNTHESIS_SYSTEM_PROMPT,
                     user_prompt=self._model_input(task, metrics, logs, runbook, evidence),
                     task_id=task.task_id,
                     trace_id=task.task_id,

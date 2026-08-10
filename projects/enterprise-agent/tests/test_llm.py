@@ -106,6 +106,7 @@ class DeepSeekProviderTests(unittest.TestCase):
         response = provider.complete_json(system_prompt="Return JSON.", user_prompt="JSON result.")
         self.assertEqual(response.attempts, 2)
         self.assertEqual([record.status for record in records], ["failed", "completed"])
+        self.assertEqual(provider.invocations, tuple(records))
         self.assertEqual(records[0].error_type, "LLMTransientError")
 
     def test_malformed_or_truncated_json_fails_closed(self) -> None:

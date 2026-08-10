@@ -115,6 +115,10 @@ flowchart LR
     DS --> SA["Single Agent"]
     DS --> PE["Plan + Executor"]
     DS --> MA["Multi-Agent"]
+    MP["Optional shared Model + Prompt Contract"] --> FW
+    MP --> SA
+    MP --> PE
+    MP --> MA
     FW --> ISO["Isolated Runtime + SQLite"]
     SA --> ISO
     PE --> ISO
@@ -123,7 +127,7 @@ flowchart LR
     SC --> RP["JSON Report"]
 ```
 
-每个 strategy × case × repetition 使用独立目录和 Runtime，避免 rate limit、circuit breaker、fault counter、ticket idempotency 和 Trace 相互污染。评分逻辑与策略实现分离，负样本必须安全拒绝才算任务成功。详细方法见 [`docs/benchmarking.md`](docs/benchmarking.md)。
+每个 strategy × case × repetition 使用独立目录、Runtime 和 Model Provider，避免 rate limit、circuit breaker、fault counter、调用记录、ticket idempotency 和 Trace 相互污染。Model-backed 模式共享生产 Synthesis 合约，但不共享 Provider 实例；评分逻辑与策略实现分离，负样本必须安全拒绝才算任务成功。详细方法见 [`docs/benchmarking.md`](docs/benchmarking.md)。
 
 ## 规划中的检索链路
 

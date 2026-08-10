@@ -30,6 +30,7 @@
 - 工具选择准确率
 - 参数准确率
 - 平均工具调用次数
+- 模型结构化输出合规率与重复预测一致性
 
 ### System
 
@@ -72,7 +73,7 @@
 
 四种策略在这个小型确定性数据集上的根因准确率、安全拒绝率、证据完整率和故障恢复率均为 1.0。当前证据只支持：自适应 Single-Agent/Plan-Executor 在健康 case 少做无关调用；Multi-Agent 的 checkpoint、并行 Span 和交叉验证带来可观察的固定开销。它不支持“Multi-Agent 质量普遍更高”的结论。
 
-当前已接入 DeepSeek V4 Flash Provider，但已提交的基准仍标记为 `deterministic_synthetic_no_llm`。在未使用真实 API key 重跑并记录重复采样前，不把 mock 测试结果写成模型效果或成本结论。
+当前已接入 DeepSeek V4 Flash Provider 与 Model-backed Benchmark v2，但已提交的基准仍标记为 `deterministic_synthetic_no_llm`。2026-08-10 的单次真实 smoke 为 67 tokens / 1562 ms，单次事故综合为 553 tokens / 2998 ms，且审批恢复没有重复调用模型；这些数字只用于验证调用、usage 和恢复链路。在重复运行并保存 v2 报告前，不把 mock 测试或单样本数字写成模型效果、方差或成本结论。
 
 ## Tool Gateway 实验
 

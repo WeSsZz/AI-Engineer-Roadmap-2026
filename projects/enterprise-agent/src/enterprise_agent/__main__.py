@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from .benchmark import BenchmarkRunner, STRATEGIES, write_report
+from .benchmark import BenchmarkBudget, BenchmarkRunner, ModelBenchmarkConfig, STRATEGIES, write_report
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .llm import DeepSeekProvider, LLMConfig, LLMConfigurationError, LLMError, LLMProvider
@@ -54,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--repetitions", type=int, default=1)
     benchmark_parser.add_argument("--output", default="work/benchmark-report.json")
     benchmark_parser.add_argument("--workspace", help="Keep isolated run databases in this directory")
+    _add_llm_arguments(benchmark_parser)
+    benchmark_parser.add_argument("--max-model-calls", type=int, default=16)
+    benchmark_parser.add_argument("--max-total-tokens", type=int, default=50_000)
+    benchmark_parser.add_argument("--max-estimated-cost-usd", type=float, default=0.10)
     smoke_parser = subparsers.add_parser("model-smoke", help="Make one live structured-output model call")
     smoke_parser.add_argument("--model", choices=("deepseek-v4-flash", "deepseek-v4-pro"))
     smoke_parser.add_argument("--thinking", choices=("enabled", "disabled"))
@@ -82,11 +86,12 @@ def print_result(result: TaskRunResult, include_trace: bool) -> None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    store = SQLiteEventStore(args.db)
     if args.command == "list":
+        store = SQLiteEventStore(args.db)
         print(json.dumps(store.list_tasks(), ensure_ascii=False, indent=2))
         return
     if args.command == "trace":
+        store = SQLiteEventStore(args.db)
         spans = store.list_spans(args.task_id)
         payload = {
             "task_id": args.task_id,
@@ -103,14 +108,38 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
     if args.command == "benchmark":
-        report = BenchmarkRunner(strategy_names=tuple(args.strategies)).run(
-            repetitions=args.repetitions,
-            workspace=args.workspace,
-        )
+        try:
+            model_config = None
+            if args.llm_provider == "deepseek":
+                model_config = ModelBenchmarkConfig.deepseek(
+                    LLMConfig.from_env(model=args.model, thinking=args.thinking)
+                )
+            budget = BenchmarkBudget(
+                max_model_calls=args.max_model_calls,
+                max_total_tokens=args.max_total_tokens,
+                max_estimated_cost_usd=args.max_estimated_cost_usd,
+            )
+            report = BenchmarkRunner(
+                strategy_names=tuple(args.strategies),
+                model_config=model_config,
+                budget=budget,
+            ).run(
+                repetitions=args.repetitions,
+                workspace=args.workspace,
+            )
+        except (LLMConfigurationError, ValueError) as exc:
+            parser.error(str(exc))
         write_report(report, args.output)
         print(
             json.dumps(
-                {"output": args.output, "dataset_version": report["dataset_version"], "aggregates": report["aggregates"]},
+                {
+                    "output": args.output,
+                    "dataset_version": report["dataset_version"],
+                    "execution_mode": report["execution_mode"],
+                    "model": report["model"],
+                    "budget": report["budget"],
+                    "aggregates": report["aggregates"],
+                },
                 ensure_ascii=False,
                 indent=2,
             )
@@ -141,6 +170,7 @@ def main() -> None:
         return
 
     rules = tuple(getattr(args, "inject_fault", []))
+    store = SQLiteEventStore(args.db)
     try:
         llm_provider = _build_llm_provider(args)
     except LLMConfigurationError as exc:

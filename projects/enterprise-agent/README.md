@@ -40,6 +40,8 @@
 - 版本化事故数据集、隔离运行目录和可复现 JSON benchmark report
 - DeepSeek V4 Flash 结构化综合适配器，保留 deterministic 模式
 - Model attempt Span 记录模型、延迟、token 和 prompt cache 命中
+- Model-backed Benchmark v2 记录 token、估算成本、Schema 合规率、缓存命中率和重复运行方差
+- 模型调用数、总 token 和估算成本三重预算，防止评测失控
 
 当前演示任务：
 
@@ -77,7 +79,7 @@ PYTHONPATH=src python -m enterprise_agent \
   --thinking disabled
 ```
 
-模型当前只综合已经通过 Verifier 的证据；它不能直接调用企业写工具、授予审批或扩展 evidence allowlist。默认仍为 `deterministic`，因此测试和 benchmark 不需要密钥。
+模型当前只综合已经通过 Verifier 的证据；它不能直接调用企业写工具、授予审批或扩展 evidence allowlist。默认仍为 `deterministic`，因此普通测试和默认 benchmark 不需要密钥。
 
 默认停在 `needs_approval`，输出包含 `task_id` 和已经固定的 `pending_action`。审批并恢复：
 
@@ -109,6 +111,23 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
 ```
 
 只运行部分策略可使用 `--strategies single_agent multi_agent`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
+
+用同一模型合约比较四种架构（会产生真实 API 费用）：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent benchmark \
+  --llm-provider deepseek \
+  --model deepseek-v4-flash \
+  --thinking disabled \
+  --repetitions 3 \
+  --max-model-calls 36 \
+  --max-total-tokens 30000 \
+  --max-estimated-cost-usd 0.02 \
+  --workspace work/deepseek-benchmark-runs \
+  --output work/deepseek-benchmark-v2.json
+```
+
+Benchmark 不传递审批 token，也不执行 `create_ticket`；预算在完整 case 边界检查。报告只保存非敏感配置指纹，不保存 API key、完整 prompt 或原始响应。
 
 运行测试：
 
@@ -177,8 +196,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 使用真实 API key 执行 smoke，并把模型 token、成本和非确定性方差接入 benchmark。
-2. Dense + BM25 + Rerank 检索和真实模型适配器。
+1. 用真实 DeepSeek 重复运行 Benchmark v2，并扩充保留集和语义评分。
+2. Dense + BM25 + Rerank 检索链路。
 3. Worker lease、取消传播和分布式任务抢占。
 4. OpenTelemetry exporter、跨服务 trace context 和指标后端。
 5. Prometheus、Loki/OpenSearch、Runbook Registry 的真实适配器。

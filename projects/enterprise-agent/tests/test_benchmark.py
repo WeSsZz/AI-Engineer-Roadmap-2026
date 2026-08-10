@@ -84,7 +84,8 @@ class BenchmarkTests(unittest.TestCase):
             target = Path(directory) / "reports" / "benchmark.json"
             write_report(report, target)
             loaded = json.loads(target.read_text(encoding="utf-8"))
-        self.assertEqual(loaded["schema_version"], 1)
+        self.assertEqual(loaded["schema_version"], 2)
+        self.assertEqual(loaded["execution_mode"], "deterministic_synthetic_no_llm")
         self.assertEqual(loaded["strategies"], ["single_agent"])
         self.assertEqual(len(loaded["runs"]), 1)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import threading
 import uuid
 import urllib.error
 import urllib.request
@@ -151,10 +152,18 @@ class DeepSeekProvider:
         self._monotonic = monotonic
         self._record_sink = record_sink
         self._sink_errors: list[str] = []
+        self._records: list[LLMCallRecord] = []
+        self._records_lock = threading.Lock()
 
     @property
     def sink_errors(self) -> tuple[str, ...]:
-        return tuple(self._sink_errors)
+        with self._records_lock:
+            return tuple(self._sink_errors)
+
+    @property
+    def invocations(self) -> tuple[LLMCallRecord, ...]:
+        with self._records_lock:
+            return tuple(self._records)
 
     def set_record_sink(self, sink: Callable[[LLMCallRecord], None] | None) -> None:
         self._record_sink = sink
@@ -288,12 +297,15 @@ class DeepSeekProvider:
         )
 
     def _record(self, record: LLMCallRecord) -> None:
+        with self._records_lock:
+            self._records.append(record)
         if self._record_sink is None:
             return
         try:
             self._record_sink(record)
         except Exception as exc:
-            self._sink_errors.append(f"{type(exc).__name__}: {exc}")
+            with self._records_lock:
+                self._sink_errors.append(f"{type(exc).__name__}: {exc}")
 
     @staticmethod
     def _http_transport(
