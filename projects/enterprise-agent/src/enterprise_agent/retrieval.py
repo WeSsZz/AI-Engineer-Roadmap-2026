@@ -7,7 +7,9 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Protocol, Sequence
+from typing import Any, Iterable, Sequence
+
+from .embeddings import EmbeddingProvider
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -77,13 +79,6 @@ class RetrievalResult:
         }
 
 
-class EmbeddingProvider(Protocol):
-    name: str
-    dimensions: int
-
-    def embed(self, text: str) -> tuple[float, ...]: ...
-
-
 class HashingEmbeddingProvider:
     """Dependency-free deterministic baseline, not a learned semantic model."""
 
@@ -93,6 +88,7 @@ class HashingEmbeddingProvider:
         if dimensions <= 0:
             raise ValueError("embedding dimensions must be positive")
         self.dimensions = dimensions
+        self.fingerprint = f"{self.name}:dimensions={dimensions}"
 
     def embed(self, text: str) -> tuple[float, ...]:
         features = _text_features(text)
@@ -106,6 +102,9 @@ class HashingEmbeddingProvider:
         if norm:
             vector = [value / norm for value in vector]
         return tuple(vector)
+
+    def embed_many(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
+        return tuple(self.embed(text) for text in texts)
 
 
 class DeterministicChunker:
@@ -166,9 +165,12 @@ class DenseKnowledgeIndex:
         self.chunks = tuple(chunks)
         if not self.chunks:
             raise ValueError("knowledge index requires at least one chunk")
-        self._vectors = tuple(
-            self.embedding_provider.embed(_indexable_text(chunk)) for chunk in self.chunks
+        started = time.perf_counter()
+        self._vectors = _embed_many(
+            self.embedding_provider,
+            tuple(_indexable_text(chunk) for chunk in self.chunks),
         )
+        self.index_build_ms = round((time.perf_counter() - started) * 1000, 3)
 
     def search(
         self,
@@ -185,7 +187,11 @@ class DenseKnowledgeIndex:
             raise ValueError("tenant_id must not be empty")
         if top_k <= 0:
             raise ValueError("top_k must be positive")
-        query_vector = self.embedding_provider.embed(query)
+        embed_query = getattr(self.embedding_provider, "embed_query", None)
+        query_vector = _validated_vector(
+            embed_query(query) if callable(embed_query) else self.embedding_provider.embed(query),
+            dimensions=self.embedding_provider.dimensions,
+        )
         ranked: list[tuple[float, KnowledgeChunk]] = []
         for chunk, vector in zip(self.chunks, self._vectors, strict=True):
             if chunk.tenant_id != tenant_id:
@@ -230,6 +236,7 @@ class BM25KnowledgeIndex:
         self.index_version = index_version
         self.k1 = k1
         self.b = b
+        started = time.perf_counter()
         self._terms = tuple(_text_features(_indexable_text(chunk)) for chunk in self.chunks)
         self._lengths = tuple(len(terms) for terms in self._terms)
         self._average_length = sum(self._lengths) / len(self._lengths)
@@ -237,6 +244,7 @@ class BM25KnowledgeIndex:
         for terms in self._terms:
             for term in set(terms):
                 self._document_frequency[term] = self._document_frequency.get(term, 0) + 1
+        self.index_build_ms = round((time.perf_counter() - started) * 1000, 3)
 
     def search(
         self,
@@ -308,6 +316,7 @@ class ReciprocalRankFusionIndex:
         self.index_version = index_version
         self.rrf_k = rrf_k
         self.chunks = dense.chunks
+        self.index_build_ms = round(dense.index_build_ms + bm25.index_build_ms, 3)
 
     def search(
         self,
@@ -325,14 +334,14 @@ class ReciprocalRankFusionIndex:
             tenant_id=tenant_id,
             top_k=candidate_k,
             filters=filters,
-            min_score=min_score,
+            min_score=0.0,
         )
         bm25_results = self.bm25.search(
             query,
             tenant_id=tenant_id,
             top_k=candidate_k,
             filters=filters,
-            min_score=min_score,
+            min_score=0.0,
         )
         chunks: dict[str, KnowledgeChunk] = {}
         scores: dict[str, float] = {}
@@ -344,7 +353,10 @@ class ReciprocalRankFusionIndex:
                 scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (self.rrf_k + result.rank)
                 component_ranks.setdefault(chunk_id, {})[f"{method}_rank"] = float(result.rank)
                 component_ranks[chunk_id][f"{method}_score"] = result.score
-        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:top_k]
+        ranked = sorted(
+            (item for item in scores.items() if item[1] > min_score),
+            key=lambda item: (-item[1], item[0]),
+        )[:top_k]
         return tuple(
             RetrievalResult(
                 chunk=chunks[chunk_id],
@@ -400,9 +412,19 @@ def load_retrieval_suite(
     return f"{suite_id}:{version}", cases
 
 
-def build_dense_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> DenseKnowledgeIndex:
+def build_dense_index(
+    corpus_path: str | Path = DEFAULT_CORPUS_PATH,
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> DenseKnowledgeIndex:
     corpus_version, chunks = load_corpus_chunks(corpus_path)
-    return DenseKnowledgeIndex(chunks, index_version=f"{corpus_version}:dense-hashing-v1")
+    provider = embedding_provider or HashingEmbeddingProvider()
+    version = (
+        f"{corpus_version}:dense-hashing-v1"
+        if _is_default_hashing_provider(provider)
+        else f"{corpus_version}:dense-{_fingerprint_id(provider)}"
+    )
+    return DenseKnowledgeIndex(chunks, embedding_provider=provider, index_version=version)
 
 
 def build_bm25_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> BM25KnowledgeIndex:
@@ -410,14 +432,33 @@ def build_bm25_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> BM25Knowl
     return BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-v1")
 
 
-def build_hybrid_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> ReciprocalRankFusionIndex:
+def build_hybrid_index(
+    corpus_path: str | Path = DEFAULT_CORPUS_PATH,
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> ReciprocalRankFusionIndex:
     corpus_version, chunks = load_corpus_chunks(corpus_path)
-    dense = DenseKnowledgeIndex(chunks, index_version=f"{corpus_version}:dense-hashing-v1")
+    provider = embedding_provider or HashingEmbeddingProvider()
+    dense_version = (
+        f"{corpus_version}:dense-hashing-v1"
+        if _is_default_hashing_provider(provider)
+        else f"{corpus_version}:dense-{_fingerprint_id(provider)}"
+    )
+    dense = DenseKnowledgeIndex(
+        chunks,
+        embedding_provider=provider,
+        index_version=dense_version,
+    )
     bm25 = BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-v1")
+    hybrid_version = (
+        f"{corpus_version}:hybrid-rrf-v1"
+        if _is_default_hashing_provider(provider)
+        else f"{corpus_version}:hybrid-rrf-{_fingerprint_id(provider)}"
+    )
     return ReciprocalRankFusionIndex(
         dense,
         bm25,
-        index_version=f"{corpus_version}:hybrid-rrf-v1",
+        index_version=hybrid_version,
     )
 
 
@@ -458,7 +499,9 @@ def evaluate_retrieval(
             filters=case.filters if not case.relevant_document_ids else None,
         )
         latencies_ms.append((time.perf_counter() - case_started) * 1000)
-        retrieved = [result.chunk.document_id for result in results]
+        retrieved = list(
+            dict.fromkeys(result.chunk.document_id for result in results)
+        )
         relevant = set(case.relevant_document_ids)
         if relevant:
             hits = relevant.intersection(retrieved)
@@ -484,7 +527,9 @@ def evaluate_retrieval(
         "benchmark_version": "retrieval-benchmark-v1",
         "retrieval_method": index.retrieval_method,
         "embedding_provider": index.embedding_provider.name if index.embedding_provider else None,
+        "embedding": _embedding_report(index.embedding_provider),
         "index_version": index.index_version,
+        "index_build_ms": getattr(index, "index_build_ms", None),
         "case_count": len(cases),
         "positive_case_count": len(positive_recalls),
         "negative_case_count": len(negative_results),
@@ -516,6 +561,96 @@ def write_retrieval_report(report: dict[str, Any], path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _embed_many(
+    provider: EmbeddingProvider,
+    texts: Sequence[str],
+) -> tuple[tuple[float, ...], ...]:
+    embed_many = getattr(provider, "embed_many", None)
+    raw_vectors = (
+        embed_many(texts)
+        if callable(embed_many)
+        else tuple(provider.embed(text) for text in texts)
+    )
+    vectors = tuple(raw_vectors)
+    if len(vectors) != len(texts):
+        raise ValueError(
+            f"embedding provider returned {len(vectors)} vectors for {len(texts)} texts"
+        )
+    return tuple(
+        _validated_vector(vector, dimensions=provider.dimensions)
+        for vector in vectors
+    )
+
+
+def _validated_vector(
+    vector: Sequence[float],
+    *,
+    dimensions: int,
+) -> tuple[float, ...]:
+    values = tuple(float(value) for value in vector)
+    if len(values) != dimensions:
+        raise ValueError(
+            f"embedding vector has {len(values)} dimensions; expected {dimensions}"
+        )
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("embedding vector contains a non-finite value")
+    norm = math.sqrt(sum(value * value for value in values))
+    if norm == 0:
+        raise ValueError("embedding vector must not be all zeros")
+    return tuple(value / norm for value in values)
+
+
+def _provider_fingerprint(provider: EmbeddingProvider) -> str:
+    value = getattr(provider, "fingerprint", None)
+    if isinstance(value, str) and value.strip():
+        return value
+    return f"{provider.name}:dimensions={provider.dimensions}"
+
+
+def _fingerprint_id(provider: EmbeddingProvider) -> str:
+    return hashlib.sha256(_provider_fingerprint(provider).encode("utf-8")).hexdigest()[:12]
+
+
+def _is_default_hashing_provider(provider: EmbeddingProvider) -> bool:
+    return isinstance(provider, HashingEmbeddingProvider) and provider.dimensions == 512
+
+
+def _embedding_report(provider: EmbeddingProvider | None) -> dict[str, Any] | None:
+    if provider is None:
+        return None
+    report: dict[str, Any] = {
+        "provider": provider.name,
+        "dimensions": provider.dimensions,
+        "fingerprint": _provider_fingerprint(provider),
+    }
+    stats = getattr(provider, "cache_stats", None)
+    if callable(stats):
+        stats = stats()
+    if isinstance(stats, dict):
+        report["cache"] = dict(stats)
+    details_provider = getattr(provider, "base", provider)
+    for attribute in (
+        "model_name",
+        "adapter_version",
+        "requested_revision",
+        "resolved_revision",
+        "batch_size",
+        "max_length",
+        "normalize_embeddings",
+        "use_fp16",
+        "requested_dtype",
+        "device",
+        "dtype",
+    ):
+        value = getattr(details_provider, attribute, None)
+        if isinstance(value, (str, int, float, bool)):
+            report[attribute] = value
+    library_versions = getattr(details_provider, "library_versions", None)
+    if isinstance(library_versions, dict):
+        report["libraries"] = dict(library_versions)
+    return report
 
 
 def _decode_document(value: Any, index: int) -> KnowledgeDocument:
@@ -626,7 +761,12 @@ def _windows(text: str, max_chars: int, overlap_chars: int) -> Iterable[tuple[in
 
 
 def _binary_ndcg(retrieved: Sequence[str], relevant: set[str]) -> float:
-    dcg = sum(1.0 / math.log2(rank + 1) for rank, item in enumerate(retrieved, 1) if item in relevant)
+    seen: set[str] = set()
+    dcg = 0.0
+    for rank, item in enumerate(retrieved, 1):
+        if item in relevant and item not in seen:
+            seen.add(item)
+            dcg += 1.0 / math.log2(rank + 1)
     ideal_hits = min(len(relevant), len(retrieved))
     ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
     return dcg / ideal if ideal else 0.0

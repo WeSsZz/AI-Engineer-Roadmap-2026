@@ -56,20 +56,24 @@
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
 - 版本化 `incident-runbooks:1.0.0` 合成语料、稳定 chunk ID 和严格字段校验
 - 依赖无关的 Hashing Dense、BM25 与 RRF Hybrid 三组基线，明确不把 hashing 冒充学习型语义 Embedding
+- 可选的 BGE-M3 学习型 Dense Provider：固定模型 revision、批量编码、SQLite 向量缓存，默认安装和 Runtime 均不加载模型
+- 检索报告分开记录模型加载、建索引和查询延迟，并保存 Embedding 指纹与缓存命中数据
 - 30 条独立 retrieval smoke set 与 Recall@5、MRR、NDCG、空结果准确率、延迟报告
 - `search_knowledge` 通过 Tool Gateway 执行租户/元数据过滤，并将索引版本、分数和来源写入 Evidence
 - 原 `get_runbook` 已成为版本化检索索引的兼容适配器，现有 Agent suite 与故障注入合同保持稳定
 
 ## 当前能力边界
 
-RAG 的确定性 R0–R2 基线已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
+RAG 的确定性 R0–R2 基线和可选的 BGE-M3 对比链路已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
 
-- 公开许可语料的 Markdown/PDF 解析，以及学习型 Embedding 与持久化向量索引
-- 学习型 Dense Retrieval、Cross-Encoder Reranker 与经过真实数据验证的 Hybrid 链路
+- 公开许可语料的 Markdown/PDF 解析与持久化近似向量索引
+- Cross-Encoder Reranker 与经过真实、人工审核数据验证的 Hybrid 链路
 - 80–100 条人工审核的开发/保留检索集与引用忠实度评测
 - 跨任务 Episodic Memory 的写入、检索、过期、删除和租户隔离
 
-当前 R0–R2 使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称真实语义检索效果。在当前短文档集上 BM25 优于 hashing Dense 和 RRF，因此 `search_knowledge` 暂时默认 BM25；引入学习型 Embedding 后必须重新评测再决定是否切换 Hybrid。`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于长期记忆。
+当前 R0–R2 和 BGE-M3 对比仍使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称生产语义检索效果。`search_knowledge` 仍默认 BM25；只有学习型 Dense/Hybrid 在人工审核的真实语料和保留集上稳定胜出后才会切换。`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于长期记忆。
+
+当前 4 条 negative retrieval case 验证的是 tenant/metadata scope 下必须返回空结果，不足以衡量“同租户但知识库没有答案”的语义拒答能力；报告里的 `no_answer_accuracy` 不能扩展解释为完整的不可回答检测率。
 
 当前演示任务：
 
@@ -168,6 +172,22 @@ PYTHONPATH=src python -m enterprise_agent retrieval-benchmark \
 
 `--strategy` 支持 `dense`、`bm25` 和 `hybrid`。默认加载 10 份项目自编合成文档和 30 条 retrieval smoke case。报告会记录语料、suite、Embedding 和索引版本；也可以用 `--corpus`、`--suite` 和 `--top-k` 加载外部版本化数据。
 
+运行真实的 BGE-M3 Dense 对比（首次运行会下载约 2 GB 权重；核心安装和默认测试不需要这些依赖）：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[bge]'
+
+.venv/bin/python -m enterprise_agent retrieval-benchmark \
+  --strategy dense \
+  --embedding-provider bge-m3 \
+  --embedding-revision 5617a9f61b028005a4858fdac845db406aefb181 \
+  --embedding-max-length 512 \
+  --output work/retrieval-bge-m3.json
+```
+
+模型 revision 是固定的，不会静默跟随 `main`；语料向量缓存在 `work/retrieval-embeddings.sqlite3`，查询始终现场编码，避免缓存命中污染 P50/P95。再次用 `--strategy hybrid` 会复用同一批语料向量。BGE-M3 仍是内存精确扫描，不等于已完成生产向量数据库；报告中的 `setup` 与查询 P50/P95 也应分开解读。
+
 只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
 也可以加载一个外部 suite 文件或目录；新增 case 不需要修改策略代码：
@@ -240,6 +260,7 @@ enterprise-agent/
 │   ├── faults.py          # 确定性工具故障注入
 │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
 │   ├── retrieval.py       # 语料合同、切分、Dense baseline 与检索评测
+│   ├── embeddings.py      # 可选 BGE-M3 Provider、版本固定与 SQLite 向量缓存
 │   ├── corpora/           # 版本化知识语料
 │   ├── retrieval_suites/  # 独立检索评测集
 │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告

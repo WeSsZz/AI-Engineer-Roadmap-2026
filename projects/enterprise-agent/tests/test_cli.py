@@ -30,6 +30,68 @@ class CLITests(unittest.TestCase):
             args = parser.parse_args(["retrieval-benchmark", "--strategy", strategy])
             self.assertEqual(args.strategy, strategy)
 
+    def test_retrieval_parser_exposes_pinned_bge_provider(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(
+            [
+                "retrieval-benchmark",
+                "--strategy",
+                "hybrid",
+                "--embedding-provider",
+                "bge-m3",
+                "--embedding-batch-size",
+                "4",
+                "--embedding-device",
+                "mps",
+                "--embedding-fp16",
+            ]
+        )
+        self.assertEqual(args.embedding_provider, "bge-m3")
+        self.assertEqual(args.embedding_revision, cli.DEFAULT_BGE_M3_REVISION)
+        self.assertEqual(args.embedding_batch_size, 4)
+        self.assertEqual(args.embedding_device, "mps")
+        self.assertTrue(args.embedding_fp16)
+
+    def test_learned_dense_report_records_provider_fingerprint(self) -> None:
+        class FakeProvider:
+            name = "learned-fake"
+            dimensions = 2
+            fingerprint = "learned-fake:model@fixed-revision"
+
+            def embed(self, text: str) -> tuple[float, ...]:
+                return (1.0, float(len(text) % 5 + 1))
+
+            def embed_many(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+                return tuple(self.embed(text) for text in texts)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "learned.json"
+            argv = [
+                "enterprise-agent",
+                "retrieval-benchmark",
+                "--strategy",
+                "dense",
+                "--embedding-provider",
+                "bge-m3",
+                "--output",
+                str(output),
+            ]
+            with patch("sys.argv", argv), patch.object(
+                cli,
+                "_build_embedding_provider",
+                return_value=FakeProvider(),
+            ), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                cli.main()
+            report = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(report["embedding_provider"], "learned-fake")
+        self.assertEqual(
+            report["embedding"]["fingerprint"],
+            "learned-fake:model@fixed-revision",
+        )
+        self.assertNotIn("dense-hashing-v1", report["index_version"])
+        self.assertIn("total_setup_ms", report["setup"])
+
     def test_retrieval_benchmark_writes_versioned_report_without_task_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "retrieval.json"

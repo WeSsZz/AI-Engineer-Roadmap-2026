@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from .benchmark import (
     BenchmarkBudget,
@@ -12,6 +13,11 @@ from .benchmark import (
     STRATEGIES,
     load_benchmark_cases,
     write_report,
+)
+from .embeddings import (
+    BGEM3EmbeddingProvider,
+    EmbeddingProvider,
+    SQLiteCachedEmbeddingProvider,
 )
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
@@ -24,6 +30,7 @@ from .retrieval import (
     build_dense_index,
     build_hybrid_index,
     evaluate_retrieval,
+    HashingEmbeddingProvider,
     load_corpus,
     load_retrieval_suite,
     write_retrieval_report,
@@ -32,6 +39,7 @@ from .store import SQLiteEventStore
 
 
 DEFAULT_OBJECTIVE = "诊断 payment-api 错误率和延迟突增的根因，并生成故障工单"
+DEFAULT_BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -95,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--max-estimated-cost-usd", type=float, default=0.10)
     retrieval_parser = subparsers.add_parser(
         "retrieval-benchmark",
-        help="Run the deterministic dense retrieval baseline",
+        help="Compare deterministic and learned retrieval providers",
     )
     retrieval_parser.add_argument("--corpus", default=str(DEFAULT_CORPUS_PATH))
     retrieval_parser.add_argument("--suite", default=str(DEFAULT_RETRIEVAL_SUITE_PATH))
@@ -106,6 +114,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retrieval_parser.add_argument("--top-k", type=int, default=5)
     retrieval_parser.add_argument("--output", default="work/retrieval-baseline.json")
+    retrieval_parser.add_argument(
+        "--embedding-provider",
+        choices=("hashing", "bge-m3"),
+        default="hashing",
+        help="Dense provider used by dense/hybrid strategies",
+    )
+    retrieval_parser.add_argument("--embedding-model", default="BAAI/bge-m3")
+    retrieval_parser.add_argument(
+        "--embedding-revision",
+        default=DEFAULT_BGE_M3_REVISION,
+        help="Pinned Hugging Face model revision",
+    )
+    retrieval_parser.add_argument("--embedding-batch-size", type=int, default=8)
+    retrieval_parser.add_argument("--embedding-max-length", type=int, default=1024)
+    retrieval_parser.add_argument("--embedding-device", default="cpu")
+    retrieval_parser.add_argument(
+        "--embedding-cache",
+        default="work/retrieval-embeddings.sqlite3",
+        help="Persistent exact-text embedding cache",
+    )
+    retrieval_parser.add_argument(
+        "--model-cache",
+        default="models/huggingface",
+        help="Directory for pinned model snapshots",
+    )
+    retrieval_parser.add_argument(
+        "--embedding-fp16",
+        action="store_true",
+        help="Use fp16 model weights when supported by the selected device",
+    )
     smoke_parser = subparsers.add_parser("model-smoke", help="Make one live structured-output model call")
     smoke_parser.add_argument("--model", choices=("deepseek-v4-flash", "deepseek-v4-pro"))
     smoke_parser.add_argument("--thinking", choices=("enabled", "disabled"))
@@ -210,18 +248,37 @@ def main() -> None:
             suite_version, cases = load_retrieval_suite(args.suite)
             if args.top_k <= 0:
                 raise ValueError("--top-k must be positive")
-            builders = {
-                "dense": build_dense_index,
-                "bm25": build_bm25_index,
-                "hybrid": build_hybrid_index,
-            }
+            if args.strategy == "bm25" and args.embedding_provider != "hashing":
+                raise ValueError(
+                    "--embedding-provider applies only to dense or hybrid strategies"
+                )
+            setup_started = time.perf_counter()
+            provider_started = time.perf_counter()
+            provider = (
+                _build_embedding_provider(args)
+                if args.strategy in {"dense", "hybrid"}
+                else None
+            )
+            provider_load_ms = round((time.perf_counter() - provider_started) * 1000, 3)
+            if args.strategy == "dense":
+                index = build_dense_index(args.corpus, embedding_provider=provider)
+            elif args.strategy == "hybrid":
+                index = build_hybrid_index(args.corpus, embedding_provider=provider)
+            else:
+                index = build_bm25_index(args.corpus)
+            total_setup_ms = round((time.perf_counter() - setup_started) * 1000, 3)
             report = evaluate_retrieval(
-                builders[args.strategy](args.corpus),
+                index,
                 cases,
                 top_k=args.top_k,
             )
             report["corpus_version"] = corpus_version
             report["suite_version"] = suite_version
+            report["setup"] = {
+                "provider_load_ms": provider_load_ms,
+                "index_build_ms": index.index_build_ms,
+                "total_setup_ms": total_setup_ms,
+            }
         except ValueError as exc:
             parser.error(str(exc))
         write_retrieval_report(report, args.output)
@@ -234,7 +291,9 @@ def main() -> None:
                     "case_count": report["case_count"],
                     "retrieval_method": report["retrieval_method"],
                     "embedding_provider": report["embedding_provider"],
+                    "embedding": report["embedding"],
                     "index_version": report["index_version"],
+                    "setup": report["setup"],
                     "metrics": report["metrics"],
                 },
                 ensure_ascii=False,
@@ -340,6 +399,21 @@ def _build_llm_provider(args: argparse.Namespace) -> LLMProvider | None:
     if args.llm_provider == "deterministic":
         return None
     return DeepSeekProvider(LLMConfig.from_env(model=args.model, thinking=args.thinking))
+
+
+def _build_embedding_provider(args: argparse.Namespace) -> EmbeddingProvider:
+    if args.embedding_provider == "hashing":
+        return HashingEmbeddingProvider()
+    provider = BGEM3EmbeddingProvider(
+        model_name=args.embedding_model,
+        revision=args.embedding_revision,
+        batch_size=args.embedding_batch_size,
+        max_length=args.embedding_max_length,
+        use_fp16=args.embedding_fp16,
+        device=args.embedding_device,
+        model_cache_dir=args.model_cache or None,
+    )
+    return SQLiteCachedEmbeddingProvider(provider, args.embedding_cache)
 
 
 if __name__ == "__main__":

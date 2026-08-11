@@ -8,6 +8,7 @@ from pathlib import Path
 from enterprise_agent.retrieval import (
     DEFAULT_CORPUS_PATH,
     build_bm25_index,
+    build_dense_index,
     DenseKnowledgeIndex,
     DeterministicChunker,
     HashingEmbeddingProvider,
@@ -19,6 +20,7 @@ from enterprise_agent.retrieval import (
     load_corpus,
     load_retrieval_suite,
     write_retrieval_report,
+    _binary_ndcg,
 )
 from enterprise_agent.tools import build_demo_runtime
 
@@ -64,6 +66,31 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertAlmostEqual(sum(value * value for value in first), 1.0)
 
+    def test_dense_index_batches_corpus_embeddings_and_versions_custom_provider(self) -> None:
+        class FakeBatchProvider:
+            name = "learned-fake"
+            dimensions = 2
+            fingerprint = "learned-fake:model@revision-1"
+
+            def __init__(self) -> None:
+                self.batches: list[tuple[str, ...]] = []
+
+            def embed(self, text: str) -> tuple[float, ...]:
+                return (1.0, float(len(text) % 7 + 1))
+
+            def embed_many(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+                values = tuple(texts)
+                self.batches.append(values)
+                return tuple(self.embed(text) for text in values)
+
+        provider = FakeBatchProvider()
+        index = build_dense_index(embedding_provider=provider)
+
+        self.assertEqual(len(provider.batches), 1)
+        self.assertGreater(len(provider.batches[0]), 1)
+        self.assertIn("dense-", index.index_version)
+        self.assertNotIn("dense-hashing-v1", index.index_version)
+
     def test_smoke_suite_has_thirty_cases_and_reports_honest_baseline(self) -> None:
         suite_version, cases = load_retrieval_suite()
         report = evaluate_dense_retrieval(build_default_dense_index(), cases, top_k=5)
@@ -95,6 +122,9 @@ class RetrievalTests(unittest.TestCase):
             saved = json.loads(target.read_text(encoding="utf-8"))
         self.assertEqual(saved["benchmark_version"], "retrieval-benchmark-v1")
         self.assertEqual(saved["case_count"], 2)
+
+    def test_document_ndcg_does_not_count_duplicate_chunks_twice(self) -> None:
+        self.assertEqual(_binary_ndcg(("doc-a", "doc-a", "doc-a"), {"doc-a"}), 1.0)
 
     def test_loader_rejects_unknown_fields(self) -> None:
         payload = json.loads(DEFAULT_CORPUS_PATH.read_text(encoding="utf-8"))

@@ -9,10 +9,13 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 - 已有 `Context Engine`：压缩当前任务的事实、证据和最近事件。
 - 已有版本化 JSON 语料、严格 Schema、确定性切分和稳定 chunk ID。
 - 已有 Hashing Dense、BM25、RRF Hybrid 三组 baseline、30 条 retrieval smoke set 和独立评测 CLI。
+- 已有可选 BGE-M3 Dense Provider：固定 Hugging Face revision、批量编码、SQLite 语料向量缓存；查询不走磁盘缓存，默认路径不导入模型依赖。
 - 已有 `search_knowledge` Tool Gateway 工具；`get_runbook` 是其兼容适配器。
-- Hashing baseline 不是学习型语义 Embedding；尚无公开语料解析、持久化向量索引、Reranker 或跨任务 Episodic Memory。
+- Hashing baseline 不是学习型语义 Embedding；BGE-M3 当前是评测用内存精确扫描，不是生产向量索引。尚无公开语料解析、Reranker 或跨任务 Episodic Memory。
 
-当前合成 smoke set 上 BM25 的 MRR/NDCG 高于 Hashing Dense 和 RRF，Runtime 因此暂时选择 BM25。该选择只对当前版本数据成立；接入学习型 Embedding 和公开语料后必须重新比较。
+Runtime 暂时选择 BM25。该选择只对当前版本数据成立；BGE-M3 的结果也必须在公开许可语料、人工审核 query 和 held-out set 上复验，不能仅凭当前合成 smoke set 切换线上检索器。
+
+当前 negative case 只验证租户和元数据 scope，不覆盖同一合法 scope 内的语义不可回答 query。因此 `no_answer_accuracy` 目前是隔离合同指标，不是完整拒答能力指标；下一版检索集必须补充同租户 hard negative 并单独校准拒答阈值。
 
 ## RAG 合同
 
@@ -42,7 +45,7 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 5. Cross-Encoder Reranker。
 6. 引用生成、忠实度和空结果安全拒答。
 
-每一步都使用同一版本检索集报告 Recall@5/10、MRR、NDCG、P50/P95 延迟和索引成本。没有实验数据时不宣称 Hybrid 或 Reranker 更优。
+每一步都使用同一版本检索集报告 Recall@5/10、MRR、NDCG、P50/P95 延迟和索引成本。模型加载、建索引和查询延迟分别报告；模型 ID、精确 revision、精度、max length、Embedding 指纹与缓存命中也写入报告。没有实验数据时不宣称 Hybrid 或 Reranker 更优。
 
 ## Memory 分层
 
