@@ -83,14 +83,16 @@ R0 使用无外部依赖的 `hashing-char-ngram-v1`，用于验证语料、Chunk
 
 ## Memory 实验
 
-状态：尚未运行。第一版覆盖 Working Memory 压缩，以及 Episodic Memory 的正确召回、过期、删除、冲突和跨租户场景。
+2026-08-11 M0–M3：确定性合同测试 10 条全部通过；同一次全量回归共 103 条测试全部通过。该结果验证 Runtime/Store 安全合同，不代表已经完成基于人工标注相似事故集的语义召回评测。
 
 | Run | 场景 | Memory Precision | 必需事实保留率 | Policy Violations | 备注 |
 | --- | --- | ---: | ---: | ---: | --- |
-| M0 | Working Memory 压缩 |  |  |  |  |
-| M1 | 相似历史事故召回 |  |  |  |  |
-| M2 | 过期/删除/冲突记忆 |  |  |  |  |
-| M3 | 跨租户隔离 |  |  |  |  |
+| M0 | Working Memory 压缩 | 1.0000 | 1.0000 | 0 | facts、evidence、plan、open items 精确保留；Runtime artifacts 不进入模型视图 |
+| M1 | 同服务历史事故召回 | 1.0000 | 1.0000 | 0 | 候选 ID 随 Task Snapshot 冻结；历史内容保持 `untrusted` |
+| M2 | 过期/删除/冲突记忆 | 1.0000 | 1.0000 | 0 | 到期边界不命中；删除后不复活；实时证据优先并记录冲突事件 |
+| M3 | 跨租户隔离 | 1.0000 | 1.0000 | 0 | 查询、ID 读取和删除均要求显式 tenant scope；测试 canary 无泄漏 |
+
+此外验证了 Episode 与终态 checkpoint/审计事件原子提交、写入故障整体回滚、恢复后恰好写入一次，以及 `WAITING_APPROVAL`、`SAFELY_REFUSED`、`FAILED`、business task 和缺少 Verifier 的结果均不写入 Episode。复现命令：`PYTHONPATH=src python -m unittest tests.test_memory -v`。
 
 ## Agent 实验
 

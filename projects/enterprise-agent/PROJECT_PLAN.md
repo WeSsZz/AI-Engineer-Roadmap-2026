@@ -140,6 +140,8 @@ RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、
 
 ### M4：Controlled Memory
 
+状态：已完成最小闭环。Working Memory、已验证事故 Episode、原子终态写入、tenant/TTL/tombstone/provenance 合同与确定性回归测试已落地；语义相似召回、Episode 版本替换和独立人工审核多轮 suite 留到下一轮。
+
 - 在 Context Engine 上固化结构化 Working Memory：事实、证据、计划、未决问题和最近事件；
 - 仅在任务完成且验证通过后写入 Episodic Memory；
 - 增加 tenant scope、provenance、时间有效性、retention 和删除合同；
@@ -210,8 +212,7 @@ RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、
 按优先级执行：
 
 1. 冻结首批公开运维语料及其许可、来源、文档版本和元数据合同；
-2. 建立 30 条人工核对的检索 smoke set，实现 Dense baseline 与带来源 Evidence；
-3. 增加 BM25、RRF 和 Reranker 对比，把结果写入 `evaluation.md`；
-4. 用真实 `search_knowledge` 替换确定性 `get_runbook`，接入现有 Tool Gateway、Trace 和 Verifier；
-5. 完成 Working Memory，再实现只保存已验证事故的最小 Episodic Memory；
-6. 同步人工复核现有 15 条 Agent synthetic draft；数据合同稳定后再开始 PostgreSQL + Worker lease。
+2. 用公开语料和学习型 Embedding 复评 Dense、BM25、RRF，再增加 Reranker 与引用忠实度；
+3. 为 Memory 建立独立多轮 suite，加入语义相似召回、Episode 版本替换和更多人工审核冲突样本；
+4. 同步人工复核现有 15 条 Agent synthetic draft，保持 Agent、检索和 Memory 评测集相互独立；
+5. 数据合同稳定后开始 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。

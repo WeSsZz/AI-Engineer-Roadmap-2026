@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from enterprise_agent import __main__ as cli
+from enterprise_agent.memory import EpisodicMemory, SQLiteMemoryStore
 
 
 class CLITests(unittest.TestCase):
@@ -29,6 +30,62 @@ class CLITests(unittest.TestCase):
         for strategy in ("dense", "bm25", "hybrid"):
             args = parser.parse_args(["retrieval-benchmark", "--strategy", strategy])
             self.assertEqual(args.strategy, strategy)
+
+    def test_run_and_memory_commands_require_explicit_tenant_scope(self) -> None:
+        parser = cli.build_parser()
+        run = parser.parse_args(["run", "--tenant-id", "tenant-a"])
+        memory_list = parser.parse_args(["memory-list", "--tenant-id", "tenant-a"])
+        memory_forget = parser.parse_args(
+            ["memory-forget", "episode:task-1", "--tenant-id", "tenant-a"]
+        )
+        self.assertEqual(run.tenant_id, "tenant-a")
+        self.assertEqual(memory_list.tenant_id, "tenant-a")
+        self.assertEqual(memory_forget.tenant_id, "tenant-a")
+
+    def test_memory_list_and_forget_respect_tenant_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "agent.db"
+            memory = EpisodicMemory.create(
+                source_task_id="task-cli",
+                source_checkpoint_version=3,
+                tenant_id="tenant-a",
+                service="payment-api",
+                scenario="incident",
+                summary="历史摘要",
+                recommended_action="检查实时证据",
+                root_cause="database_pool_exhaustion",
+                confidence="high",
+            )
+            SQLiteMemoryStore(database).remember(memory)
+
+            output = StringIO()
+            argv = [
+                "enterprise-agent",
+                "--db",
+                str(database),
+                "memory-list",
+                "--tenant-id",
+                "tenant-a",
+            ]
+            with patch("sys.argv", argv), redirect_stdout(output), redirect_stderr(StringIO()):
+                cli.main()
+            listed = json.loads(output.getvalue())
+            self.assertEqual([item["memory_id"] for item in listed], [memory.memory_id])
+
+            output = StringIO()
+            argv = [
+                "enterprise-agent",
+                "--db",
+                str(database),
+                "memory-forget",
+                memory.memory_id,
+                "--tenant-id",
+                "tenant-a",
+            ]
+            with patch("sys.argv", argv), redirect_stdout(output), redirect_stderr(StringIO()):
+                cli.main()
+            self.assertTrue(json.loads(output.getvalue())["deleted"])
+            self.assertEqual(SQLiteMemoryStore(database).list_for_tenant("tenant-a"), [])
 
     def test_retrieval_benchmark_writes_versioned_report_without_task_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -52,6 +52,7 @@ class TaskEnvelope:
     budget: Budget = field(default_factory=Budget)
     risk_level: RiskLevel = "low"
     metadata: dict[str, Any] = field(default_factory=dict)
+    tenant_id: str = "demo"
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,8 @@ class TaskState:
     evidence_refs: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     artifacts: dict[str, Any] = field(default_factory=dict)
+    memory_candidate_ids: list[str] = field(default_factory=list)
+    memory_recall_completed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)

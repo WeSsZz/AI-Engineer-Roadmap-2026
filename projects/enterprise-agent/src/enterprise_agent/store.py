@@ -328,10 +328,11 @@ class SQLiteEventStore:
     @staticmethod
     def _encode_snapshot(execution: StoredExecution) -> str:
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "task": {
                 "task_id": execution.task.task_id,
                 "objective": execution.task.objective,
+                "tenant_id": execution.task.tenant_id,
                 "constraints": list(execution.task.constraints),
                 "allowed_tools": list(execution.task.allowed_tools),
                 "budget": asdict(execution.task.budget),
@@ -351,6 +352,7 @@ class SQLiteEventStore:
         task = TaskEnvelope(
             task_id=task_data["task_id"],
             objective=task_data["objective"],
+            tenant_id=task_data.get("tenant_id", "demo"),
             constraints=tuple(task_data["constraints"]),
             allowed_tools=tuple(task_data["allowed_tools"]),
             budget=Budget(**task_data["budget"]),
@@ -368,6 +370,8 @@ class SQLiteEventStore:
             evidence_refs=state_data["evidence_refs"],
             errors=state_data["errors"],
             artifacts=state_data["artifacts"],
+            memory_candidate_ids=state_data.get("memory_candidate_ids", []),
+            memory_recall_completed=state_data.get("memory_recall_completed", False),
         )
         results = [SQLiteEventStore._decode_result(result) for result in payload["agent_results"]]
         return StoredExecution(task=task, state=state, agent_results=results, events=[])

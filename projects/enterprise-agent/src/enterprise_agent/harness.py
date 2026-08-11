@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from .agents import (
@@ -16,9 +17,18 @@ from .agents import (
     Verifier,
     incident_service,
 )
-from .context import ContextEngine
+from .context import ContextEngine, ContextSnapshot
 from .faults import FaultInjector
 from .llm import LLMProvider
+from .memory import (
+    DEFAULT_MEMORY_RECALL_LIMIT,
+    EpisodicMemory,
+    MemoryFinalizationError,
+    SQLiteMemoryStore,
+    WorkingMemorySnapshot,
+    episode_from_completed_task,
+    memory_service,
+)
 from .models import AgentResult, Budget, Event, SpanKind, TaskEnvelope, TaskState, TaskStatus
 from .routing import ORCHESTRATION_MODES, IncidentRiskRouter
 from .state_machine import TERMINAL_STATUSES, transition
@@ -45,6 +55,8 @@ class TaskRunResult:
     agent_results: list[AgentResult] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
     context_compacted: bool = False
+    working_memory: WorkingMemorySnapshot | None = None
+    historical_memories: tuple[EpisodicMemory, ...] = ()
 
 
 class EnterpriseAgentHarness:
@@ -62,8 +74,16 @@ class EnterpriseAgentHarness:
         store: SQLiteEventStore | None = None,
         fault_injector: FaultInjector | None = None,
         llm_provider: LLMProvider | None = None,
+        memory_store: SQLiteMemoryStore | None = None,
+        memory_ttl: timedelta = timedelta(days=30),
     ):
         self.store = store or SQLiteEventStore()
+        self.memory_store = memory_store or SQLiteMemoryStore(self.store.path)
+        if self.memory_store.path.resolve() != self.store.path.resolve():
+            raise ValueError("memory_store and store must use the same SQLite database")
+        if memory_ttl <= timedelta(0):
+            raise ValueError("memory_ttl must be positive")
+        self.memory_ttl = memory_ttl
         self.tracer = SQLiteTraceRecorder(self.store)
         self._owns_runtime = runtime is None
         self.runtime = runtime or build_demo_runtime(
@@ -107,7 +127,11 @@ class EnterpriseAgentHarness:
         failpoint: str | None = None,
         scenario: str | None = None,
         orchestration: str = "fixed_multi",
+        tenant_id: str = "demo",
     ) -> TaskRunResult:
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("tenant_id must not be empty")
+        tenant_id = tenant_id.strip()
         selected_scenario = scenario or self._detect_scenario(objective)
         if selected_scenario not in {"business", "incident"}:
             raise ValueError("scenario must be 'business' or 'incident'")
@@ -118,6 +142,7 @@ class EnterpriseAgentHarness:
         task = TaskEnvelope(
             task_id=f"task-{uuid.uuid4().hex[:8]}",
             objective=objective,
+            tenant_id=tenant_id,
             constraints=constraints,
             allowed_tools=(
                 "search_docs",
@@ -146,11 +171,13 @@ class EnterpriseAgentHarness:
             "supervisor",
             {
                 "objective": objective,
+                "tenant_id": task.tenant_id,
                 "risk_level": task.risk_level,
                 "scenario": selected_scenario,
                 "orchestration": orchestration,
             },
         )
+        self._recall_memories(execution)
         self.store.create(execution)
         with self.tracer.start_span(
             trace_id=task.task_id,
@@ -182,6 +209,7 @@ class EnterpriseAgentHarness:
         execution = self.store.load(task_id)
         if execution.state.status in TERMINAL_STATUSES:
             return self._result(execution)
+        self._recall_memories(execution)
         self._emit(
             execution,
             "task_resumed",
@@ -250,7 +278,7 @@ class EnterpriseAgentHarness:
                     continue
 
                 if status == TaskStatus.VERIFYING:
-                    context = self.context_engine.build(execution.task, execution.state, execution.events)
+                    context = self._build_context(execution)
                     specialist_names = {agent.name for agent in self._specialists(execution.task)}
                     specialists = [result for result in execution.agent_results if result.agent_name in specialist_names]
                     with self._agent_span(execution, self.verifier.name, parent_span_id) as span:
@@ -277,7 +305,7 @@ class EnterpriseAgentHarness:
                     continue
 
                 if status == TaskStatus.SYNTHESIZING:
-                    context = self.context_engine.build(execution.task, execution.state, execution.events)
+                    context = self._build_context(execution)
                     synthesis_agent = self._synthesis_agent(execution.task)
                     with self._agent_span(execution, synthesis_agent.name, parent_span_id) as span:
                         synthesis = synthesis_agent.run(
@@ -298,6 +326,11 @@ class EnterpriseAgentHarness:
                         "agent_completed",
                         synthesis.agent_name,
                         {"status": synthesis.status, "summary": synthesis.summary},
+                    )
+                    self._record_memory_conflicts(
+                        execution,
+                        context.historical_memories,
+                        synthesis,
                     )
                     if synthesis.status == "failed":
                         outcome_class = self._classify_unsuccessful_synthesis(execution)
@@ -326,8 +359,6 @@ class EnterpriseAgentHarness:
                         target = TaskStatus.COMPLETED
                     transition(execution.state, target)
                     self._emit(execution, "state_transition", "supervisor", {"to": target.value})
-                    self._checkpoint(execution)
-                    self._interrupt_if_requested(execution, failpoint, "after_synthesis")
                     if target in {TaskStatus.COMPLETED, TaskStatus.SAFELY_REFUSED}:
                         self._emit(
                             execution,
@@ -338,7 +369,10 @@ class EnterpriseAgentHarness:
                                 "outcome_class": execution.state.artifacts["outcome_class"],
                             },
                         )
+                        self._finalize_terminal(execution)
+                    else:
                         self._checkpoint(execution)
+                    self._interrupt_if_requested(execution, failpoint, "after_synthesis")
                     continue
 
                 if status == TaskStatus.WAITING_APPROVAL:
@@ -367,17 +401,23 @@ class EnterpriseAgentHarness:
                     execution.state.artifacts["outcome_class"] = "success"
                     self._emit(
                         execution,
+                        "state_transition",
+                        "supervisor",
+                        {"to": TaskStatus.COMPLETED.value},
+                    )
+                    self._emit(
+                        execution,
                         "task_finished",
                         "supervisor",
                         {"status": TaskStatus.COMPLETED.value},
                     )
-                    self._checkpoint(execution)
+                    self._finalize_terminal(execution)
                     self._interrupt_if_requested(execution, failpoint, "after_action")
                     continue
 
                 raise RuntimeError(f"Unhandled task status: {status.value}")
 
-        except (SimulatedInterruption, ConcurrentCheckpointError):
+        except (SimulatedInterruption, ConcurrentCheckpointError, MemoryFinalizationError):
             raise
         except Exception as exc:
             execution.state.errors.append(f"{type(exc).__name__}: {exc}")
@@ -463,7 +503,7 @@ class EnterpriseAgentHarness:
         pending = [agent for agent in agents if agent.name not in completed]
         if not pending:
             return
-        context = self.context_engine.build(execution.task, execution.state, execution.events)
+        context = self._build_context(execution)
         self._emit(
             execution,
             "parallel_dispatch",
@@ -559,6 +599,121 @@ class EnterpriseAgentHarness:
             {"status": ticket_output.status, "data": ticket_output.data, "tool_call": ticket_output.metadata},
         )
 
+    def _recall_memories(self, execution: StoredExecution) -> None:
+        if execution.state.memory_recall_completed:
+            return
+        memories = self.memory_store.list_for_tenant(
+            execution.task.tenant_id,
+            service=memory_service(execution.task),
+            limit=DEFAULT_MEMORY_RECALL_LIMIT,
+            exclude_source_task_id=execution.task.task_id,
+        )
+        execution.state.memory_candidate_ids = [memory.memory_id for memory in memories]
+        execution.state.memory_recall_completed = True
+        self._emit(
+            execution,
+            "memory_recall_completed",
+            "memory_runtime",
+            {
+                "candidate_ids": list(execution.state.memory_candidate_ids),
+                "count": len(memories),
+                "tenant_id": execution.task.tenant_id,
+                "service": memory_service(execution.task),
+            },
+        )
+
+    def _active_memories(self, execution: StoredExecution) -> tuple[EpisodicMemory, ...]:
+        candidates = (
+            self.memory_store.get_active(memory_id, tenant_id=execution.task.tenant_id)
+            for memory_id in execution.state.memory_candidate_ids
+        )
+        return tuple(memory for memory in candidates if memory is not None)
+
+    def _build_context(self, execution: StoredExecution) -> ContextSnapshot:
+        return self.context_engine.build(
+            execution.task,
+            execution.state,
+            execution.events,
+            historical_memories=self._active_memories(execution),
+        )
+
+    def _finalize_terminal(self, execution: StoredExecution) -> None:
+        finished = next(
+            (event for event in reversed(execution.events) if event.event_type == "task_finished"),
+            None,
+        )
+        if finished is None:
+            raise MemoryFinalizationError(
+                execution.task.task_id,
+                RuntimeError("terminal finalization requires a task_finished event"),
+            )
+        completed_at = datetime.fromisoformat(finished.occurred_at.replace("Z", "+00:00"))
+        episode = episode_from_completed_task(
+            execution.task,
+            execution.state,
+            execution.agent_results,
+            completed_at=completed_at,
+            source_checkpoint_version=execution.state.version + 1,
+            ttl=self.memory_ttl,
+        )
+        if episode is not None:
+            execution.state.artifacts["episodic_memory_id"] = episode.memory_id
+            self._emit(
+                execution,
+                "episodic_memory_written",
+                "memory_runtime",
+                {
+                    "memory_id": episode.memory_id,
+                    "memory_version": episode.memory_version,
+                    "source_checkpoint_version": episode.source_checkpoint_version,
+                    "tenant_id": episode.tenant_id,
+                    "service": episode.service,
+                    "expires_at": episode.expires_at,
+                },
+            )
+        try:
+            self.memory_store.finalize_execution(self.store, execution, episode)
+        except ConcurrentCheckpointError:
+            raise
+        except Exception as exc:
+            raise MemoryFinalizationError(execution.task.task_id, exc) from exc
+
+    @staticmethod
+    def _record_memory_conflicts(
+        execution: StoredExecution,
+        memories: tuple[EpisodicMemory, ...],
+        synthesis: AgentResult,
+    ) -> None:
+        current_root_cause = synthesis.data.get("root_cause")
+        if synthesis.status != "completed" or not isinstance(current_root_cause, str):
+            return
+        for memory in memories:
+            if memory.root_cause and memory.root_cause != current_root_cause:
+                EnterpriseAgentHarness._emit(
+                    execution,
+                    "memory_conflict_detected",
+                    "memory_runtime",
+                    {
+                        "memory_id": memory.memory_id,
+                        "memory_version": memory.memory_version,
+                        "historical_root_cause": memory.root_cause,
+                        "current_root_cause": current_root_cause,
+                        "resolution": "prefer_realtime_evidence",
+                    },
+                )
+
+    def list_memories(
+        self,
+        *,
+        tenant_id: str,
+        service: str | None = None,
+        limit: int = 20,
+    ) -> list[EpisodicMemory]:
+        return self.memory_store.list_for_tenant(tenant_id, service=service, limit=limit)
+
+    def forget_memory(self, memory_id: str, *, tenant_id: str) -> bool:
+        return self.memory_store.forget(memory_id, tenant_id=tenant_id)
+
     def _checkpoint(self, execution: StoredExecution) -> None:
         self.store.checkpoint(execution)
 
@@ -607,7 +762,7 @@ class EnterpriseAgentHarness:
             raise SimulatedInterruption(execution.task.task_id, current)
 
     def _result(self, execution: StoredExecution) -> TaskRunResult:
-        context = self.context_engine.build(execution.task, execution.state, execution.events)
+        context = self._build_context(execution)
         return TaskRunResult(
             task=execution.task,
             state=execution.state,
@@ -616,4 +771,6 @@ class EnterpriseAgentHarness:
             agent_results=execution.agent_results,
             events=execution.events,
             context_compacted=context.compacted,
+            working_memory=context.working_memory,
+            historical_memories=context.historical_memories,
         )

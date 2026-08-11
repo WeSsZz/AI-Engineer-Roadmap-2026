@@ -6,11 +6,12 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 
 ## 当前状态
 
-- 已有 `Context Engine`：压缩当前任务的事实、证据和最近事件。
+- 已有结构化 Working Memory：保存当前任务的事实、证据、计划、未决项和冻结的历史候选 ID，模型视图不包含 Runtime artifacts。
 - 已有版本化 JSON 语料、严格 Schema、确定性切分和稳定 chunk ID。
 - 已有 Hashing Dense、BM25、RRF Hybrid 三组 baseline、30 条 retrieval smoke set 和独立评测 CLI。
 - 已有 `search_knowledge` Tool Gateway 工具；`get_runbook` 是其兼容适配器。
-- Hashing baseline 不是学习型语义 Embedding；尚无公开语料解析、持久化向量索引、Reranker 或跨任务 Episodic Memory。
+- 已有 SQLite Episodic Memory v1：只写已完成且验证通过的高置信事故，支持租户隔离、provenance、有效期、软删除和原子终态提交。
+- Hashing baseline 不是学习型语义 Embedding；尚无公开语料解析、持久化向量索引、Reranker、语义 Memory Search 或 Episode 版本替换。
 
 当前合成 smoke set 上 BM25 的 MRR/NDCG 高于 Hashing Dense 和 RRF，Runtime 因此暂时选择 BM25。该选择只对当前版本数据成立；接入学习型 Embedding 和公开语料后必须重新比较。
 
@@ -65,9 +66,11 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 
 - `SAFELY_REFUSED`、`FAILED` 和未审批结论默认不写入；
 - 写入绑定 task ID、outcome、证据和 memory version；
-- 支持 TTL、显式删除和版本替换；
+- v1 支持 TTL 和显式软删除；版本替换保留到独立 Memory suite 稳定后实现；
 - 查询必须携带 tenant scope；
 - 与实时 Metrics/Logs 冲突时，实时证据优先并记录冲突事件。
+
+当前实现把首次召回得到的 memory ID 随 Task Snapshot 持久化。后续 Context 构建只重新校验这些候选的 tenant、有效期和 tombstone，不会在任务中途加入新记忆；被删除或过期的候选会立即停止进入模型上下文。Episode、`task_finished`、`episodic_memory_written` 和终态 Snapshot 使用同一 SQLite 事务提交。
 
 ## 安全与评测
 

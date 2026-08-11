@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 
 from .benchmark import (
     BenchmarkBudget,
@@ -16,6 +17,7 @@ from .benchmark import (
 from .faults import FaultInjector, FaultRule
 from .harness import EnterpriseAgentHarness, TaskRunResult
 from .llm import DeepSeekProvider, LLMConfig, LLMConfigurationError, LLMError, LLMProvider
+from .memory import SQLiteMemoryStore
 from .routing import ORCHESTRATION_MODES
 from .retrieval import (
     DEFAULT_CORPUS_PATH,
@@ -45,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--trace", action="store_true", help="Print the complete event trace")
     run_parser.add_argument("--failpoint", help="Interrupt after a checkpoint for recovery testing")
     run_parser.add_argument("--scenario", choices=("business", "incident"))
+    run_parser.add_argument("--tenant-id", default="demo", help="Trusted tenant scope for this task")
     run_parser.add_argument(
         "--orchestration",
         choices=ORCHESTRATION_MODES,
@@ -68,6 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_llm_arguments(resume_parser)
 
     subparsers.add_parser("list", help="List persisted tasks")
+    memory_list_parser = subparsers.add_parser("memory-list", help="List active episodic memories")
+    memory_list_parser.add_argument("--tenant-id", required=True)
+    memory_list_parser.add_argument("--service")
+    memory_list_parser.add_argument("--limit", type=int, default=20)
+    memory_forget_parser = subparsers.add_parser("memory-forget", help="Soft-delete an episodic memory")
+    memory_forget_parser.add_argument("memory_id")
+    memory_forget_parser.add_argument("--tenant-id", required=True)
     trace_parser = subparsers.add_parser("trace", help="Show persisted spans and latency metrics")
     trace_parser.add_argument("task_id")
     benchmark_parser = subparsers.add_parser("benchmark", help="Compare agent orchestration strategies")
@@ -115,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
 def print_result(result: TaskRunResult, include_trace: bool) -> None:
     payload = {
         "task_id": result.task.task_id,
+        "tenant_id": result.task.tenant_id,
         "status": result.state.status.value,
         "checkpoint_version": result.state.version,
         "answer": result.answer,
@@ -128,6 +139,8 @@ def print_result(result: TaskRunResult, include_trace: bool) -> None:
         "outcome_class": result.state.artifacts.get("outcome_class"),
         "model_call": result.state.artifacts.get("model_call"),
         "model_error": result.state.artifacts.get("model_error"),
+        "episodic_memory_id": result.state.artifacts.get("episodic_memory_id"),
+        "historical_memory_ids": [memory.memory_id for memory in result.historical_memories],
     }
     if include_trace:
         payload["events"] = [event.__dict__ for event in result.events]
@@ -140,6 +153,33 @@ def main() -> None:
     if args.command == "list":
         store = SQLiteEventStore(args.db)
         print(json.dumps(store.list_tasks(), ensure_ascii=False, indent=2))
+        return
+    if args.command == "memory-list":
+        try:
+            memories = SQLiteMemoryStore(args.db).list_for_tenant(
+                args.tenant_id,
+                service=args.service,
+                limit=args.limit,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps([asdict(memory) for memory in memories], ensure_ascii=False, indent=2))
+        return
+    if args.command == "memory-forget":
+        try:
+            deleted = SQLiteMemoryStore(args.db).forget(
+                args.memory_id,
+                tenant_id=args.tenant_id,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {"memory_id": args.memory_id, "tenant_id": args.tenant_id, "deleted": deleted},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
     if args.command == "trace":
         store = SQLiteEventStore(args.db)
@@ -286,6 +326,7 @@ def main() -> None:
                 failpoint=args.failpoint,
                 scenario=args.scenario,
                 orchestration=args.orchestration,
+                tenant_id=args.tenant_id,
             )
         else:
             result = harness.resume(

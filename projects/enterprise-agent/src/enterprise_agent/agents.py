@@ -358,6 +358,7 @@ class IncidentSynthesisAgent:
                 )
                 recommendation = "按 Runbook 暂停非必要批处理，检查慢查询和最近发布；经值班负责人审批后扩容或回滚。"
             confidence = "high"
+            root_cause = "database_pool_exhaustion"
         else:
             healthy_triage = bool(metrics and metrics.data.get("anomalous") is False)
             if healthy_triage:
@@ -368,10 +369,12 @@ class IncidentSynthesisAgent:
                 answer = "运维证据未通过交叉验证，系统不会给出确定性根因或自动处置。"
                 recommendation = "修复失败的数据源或补齐 Metrics、Logs、Runbook 证据后重新诊断。"
             confidence = "insufficient"
+            root_cause = None
         state.completed_steps.append("incident_synthesis")
         state.artifacts["answer"] = answer
         state.artifacts["recommendation"] = recommendation
         state.artifacts["root_cause_confidence"] = confidence
+        state.artifacts["root_cause"] = root_cause
         state.artifacts["model_call"] = model_metadata
         if model_error:
             state.artifacts["model_error"] = model_error
@@ -383,6 +386,7 @@ class IncidentSynthesisAgent:
                 "answer": answer,
                 "recommendation": recommendation,
                 "root_cause_confidence": confidence,
+                "root_cause": root_cause,
                 "source_count": len(evidence),
                 "model_call": model_metadata,
                 "model_error": model_error,

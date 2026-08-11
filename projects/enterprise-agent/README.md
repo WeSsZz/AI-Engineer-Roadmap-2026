@@ -59,6 +59,12 @@
 - 30 条独立 retrieval smoke set 与 Recall@5、MRR、NDCG、空结果准确率、延迟报告
 - `search_knowledge` 通过 Tool Gateway 执行租户/元数据过滤，并将索引版本、分数和来源写入 Evidence
 - 原 `get_runbook` 已成为版本化检索索引的兼容适配器，现有 Agent suite 与故障注入合同保持稳定
+- Context Engine 输出不含审批、工单等 Runtime artifacts 的结构化 Working Memory
+- 每个任务在首次执行前冻结同租户、同服务的历史候选 ID，resume 不会静默换一批记忆
+- 仅将 `COMPLETED + Verifier 通过 + high-confidence root cause` 的事故写入 Episodic Memory
+- 终态 Task、审计事件和 Episode 在同一 SQLite 事务中提交，崩溃恢复不会产生半写状态
+- Episodic Memory 保存 task/checkpoint、证据 provenance、有效期和 tombstone，并提供租户隔离的查询与删除 CLI
+- 历史记忆始终标记为 `historical + untrusted`；与本次实时证据冲突时实时证据优先并记录 Trace
 
 ## 当前能力边界
 
@@ -67,9 +73,9 @@ RAG 的确定性 R0–R2 基线已经实现，但以下能力仍属于下一阶�
 - 公开许可语料的 Markdown/PDF 解析，以及学习型 Embedding 与持久化向量索引
 - 学习型 Dense Retrieval、Cross-Encoder Reranker 与经过真实数据验证的 Hybrid 链路
 - 80–100 条人工审核的开发/保留检索集与引用忠实度评测
-- 跨任务 Episodic Memory 的写入、检索、过期、删除和租户隔离
+- Episodic Memory 的语义相似度召回、版本替换、独立多轮评测集和人工审核数据
 
-当前 R0–R2 使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称真实语义检索效果。在当前短文档集上 BM25 优于 hashing Dense 和 RRF，因此 `search_knowledge` 暂时默认 BM25；引入学习型 Embedding 后必须重新评测再决定是否切换 Hybrid。`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于长期记忆。
+当前 R0–R2 使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称真实语义检索效果。在当前短文档集上 BM25 优于 hashing Dense 和 RRF，因此 `search_knowledge` 暂时默认 BM25；引入学习型 Embedding 后必须重新评测再决定是否切换 Hybrid。Episodic Memory v1 只按可信 tenant identity、service 和时间倒序召回，不能等同于已经完成语义 Memory Search。
 
 当前演示任务：
 
@@ -80,7 +86,17 @@ Demo 会识别数据库连接池耗尽，给出证据绑定的 Runbook 建议，
 ## 快速运行
 
 ```bash
-PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db run
+PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db run --tenant-id demo
+```
+
+查看或显式删除当前有效的历史事故记忆：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db \
+  memory-list --tenant-id demo --service payment-api
+
+PYTHONPATH=src python -m enterprise_agent --db work/enterprise_agent.db \
+  memory-forget episode:task-xxxxxxxx --tenant-id demo
 ```
 
 注入一次瞬时 Metrics 故障，验证重试与 Trace：
@@ -239,6 +255,7 @@ enterprise-agent/
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
 │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
+│   ├── memory.py          # Working Memory、原子 Episode 投影、TTL 与删除
 │   ├── retrieval.py       # 语料合同、切分、Dense baseline 与检索评测
 │   ├── corpora/           # 版本化知识语料
 │   ├── retrieval_suites/  # 独立检索评测集
@@ -286,8 +303,8 @@ enterprise-agent/
 
 1. 冻结一组公开、可分享的 Runbook、事故复盘和运维 SOP 语料，并建立首批检索标注集。
 2. 用公开许可语料和学习型 Embedding 替换当前合成/hashing 基线，再增加 Reranker 和引用忠实度评测。
-3. 在现有 Context Engine 上完成 Working Memory，并增加仅写入已验证事故的 Episodic Memory 最小闭环。
-4. 人工复核新增 15 条 synthetic draft，并将 Agent 与检索评测集分别扩展，避免用同一数据同时调策略和宣称效果。
+3. 将 Memory 合同扩展为独立多轮 suite，增加版本替换、更多服务和人工审核的冲突样本。
+4. 人工复核新增 15 条 synthetic draft，并将 Agent、检索和 Memory 评测集分别扩展，避免用同一数据同时调策略和宣称效果。
 5. 数据合同稳定后增加 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。
 
 完整升级边界、里程碑与停止条件见 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)。
