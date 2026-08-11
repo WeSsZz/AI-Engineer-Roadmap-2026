@@ -2,11 +2,14 @@
 
 ## 定位
 
-Harness 控制单次任务如何推进；Agent Infra 提供任务跨进程、跨时间可靠运行所需的持久化、工具网关、可观测性和评测能力。
+Harness 控制单次任务如何推进；Knowledge & Memory Layer 提供可追溯上下文；Agent Infra 提供任务跨进程、跨时间可靠运行所需的持久化、工具网关、可观测性和评测能力。
 
 ```text
 Agent Layer
   Metrics Investigator / Log Investigator / Runbook Researcher / Verifier / Synthesis
+
+Knowledge & Memory Layer (RAG R0-R2 implemented; Memory planned)
+  Ingestion / Hybrid Retrieval / Reranker / Working Memory / Episodic Memory
 
 Runtime Layer
   State Machine / Checkpoint / Event Store / Context Engine / Tool Runtime / Model Provider
@@ -56,12 +59,14 @@ flowchart TD
 | Risk Router | 根据已验证的结构化指标选择 triage 或完整验证链路 | 绕过 Verifier、审批或工具策略 |
 | Agent | 决策、分析、验证和合成 | 直接持久化共享状态 |
 | Context | 模型可见上下文、压缩视图、token 预算 | 删除原始事件 |
+| Working Memory | 当前任务的事实、证据、计划、未决问题和压缩摘要 | 跨租户共享或替代持久化事件 |
+| Episodic Memory | 检索经过验证的历史事故，并执行范围、保留期和删除策略 | 把旧事故当成本次事实或自动写入未验证结论 |
 | Tool Gateway | Schema、白名单、审批、超时重试、限流、熔断、幂等 | 自主规划 |
 | Model Provider | JSON 请求、重试、响应解析、usage 记录 | 改写已验证证据或执行工具 |
 | Event Store | Snapshot、事件轨迹、乐观锁 | 判断业务结论 |
 | Trace Recorder | Span 生命周期、父子关系、延迟与错误聚合 | 替代业务事件或完整日志正文 |
 | Fault Injector | 在 provider adapter 边界复现瞬时、永久和超时故障 | 绕过 Gateway 策略 |
-| Retrieval | 召回、融合、重排 | 业务写操作 |
+| Retrieval | 文档摄取、索引、召回、融合、重排、来源引用和版本记录 | 判断最终根因或执行业务写操作 |
 | Evaluation | 数据集、指标、回归测试、故障注入 | 修改线上行为 |
 | API | 会话、鉴权、流式返回 | Agent 内部推理 |
 
@@ -138,18 +143,27 @@ flowchart LR
 
 每个 strategy × case × repetition 使用独立目录、Runtime 和 Model Provider，避免 rate limit、circuit breaker、fault counter、调用记录、ticket idempotency 和 Trace 相互污染。Model-backed 模式共享生产 Synthesis 合约，但不共享 Provider 实例；评分逻辑与策略实现分离，负样本必须安全拒绝才算任务成功。详细方法见 [`docs/benchmarking.md`](docs/benchmarking.md)。
 
-## 规划中的检索链路
+## 目标 RAG 与 Memory 链路
 
 ```mermaid
-flowchart LR
+flowchart TD
+    DOC["Runbook / Postmortem / SOP"] --> ING["Parse + Chunk + Metadata"]
+    ING --> IDX["Versioned BM25 + Vector Index"]
     Q["Query"] --> DR["Dense Retrieval"]
     Q --> BM["BM25"]
+    IDX --> DR
+    IDX --> BM
     DR --> F["Fusion / RRF"]
     BM --> F
     F --> RR["Reranker"]
     RR --> E["Evidence"]
-    E --> A["Agent Runtime"]
+    E --> WM["Working Memory"]
+    EM["Verified Episodic Memory"] --> WM
+    WM --> A["Agent Runtime + Verifier"]
+    A -->|"Completed + verified only"| EM
 ```
+
+该链路尚在规划中。检索结果和历史记忆都按不可信输入处理：必须携带 `tenant_id`、来源、文档/记忆版本和时间；Verifier 只允许引用实际进入本次 Evidence allowlist 的内容。Episodic Memory 只接收已完成且通过验证的事故摘要，并支持过期和删除。
 
 ## 待决策记录
 

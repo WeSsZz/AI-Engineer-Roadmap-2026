@@ -121,6 +121,7 @@ class EnterpriseAgentHarness:
             constraints=constraints,
             allowed_tools=(
                 "search_docs",
+                "search_knowledge",
                 "query_metrics",
                 "query_service_metrics",
                 "search_logs",

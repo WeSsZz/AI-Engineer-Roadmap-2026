@@ -1,10 +1,10 @@
-# Durable Agent Runtime & Evaluation Harness：升级规划
+# Reliable Enterprise Agent：RAG、Memory、Runtime 与 Evaluation 升级规划
 
 ## 1. 项目定位
 
-本项目不再扩展为泛化的“企业 Multi-Agent 平台”，而是聚焦一个可验证的问题：
+本项目不扩展为泛化的“企业 Multi-Agent 平台”，而是聚焦一个可验证的问题：
 
-> 当模型不稳定、工具失败、Worker 崩溃、任务需要审批或副作用可能重复时，Agent 如何仍然可恢复、可审计、可评测？
+> Agent 如何从企业知识与历史经验中获得正确、可追溯的上下文，并在模型不稳定、工具失败、Worker 崩溃或任务涉及副作用时仍然可恢复、可审计、可评测？
 
 目标用户是构建企业 Agent、AI Platform、Evals & Environments 与 Post-training Infrastructure 的工程团队。当前 Git 主线是唯一开发基线；历史阶段由提交和 tag 保存，不再创建 `work/phase*` 代码副本。
 
@@ -12,10 +12,12 @@
 
 ### 核心能力
 
-1. Durable Runtime：状态机、checkpoint、resume、deadline、cancellation、lease 与幂等副作用。
-2. Tool Runtime：Schema、权限、审批、身份、超时、重试、熔断、隔离与审计。
-3. Evaluation Harness：Task、Trial、Transcript、Outcome、Grader、Suite 与多次运行可靠性。
-4. Observability & Replay：Trace、版本指纹、OpenTelemetry、离线回放与策略对比。
+1. Evaluated RAG：文档摄取、元数据、Dense/BM25、融合、重排、引用与版本化检索评测。
+2. Controlled Memory：当前任务 Working Memory，以及只保存已验证事故的租户隔离 Episodic Memory。
+3. Durable Runtime：状态机、checkpoint、resume、deadline、cancellation、lease 与幂等副作用。
+4. Tool Runtime：Schema、权限、审批、身份、超时、重试、熔断、隔离与审计。
+5. Evaluation Harness：Task、Trial、Transcript、Outcome、Grader、Suite 与多次运行可靠性。
+6. Observability & Replay：Trace、语料/索引/记忆版本指纹、OpenTelemetry、离线回放与策略对比。
 
 ### Learning-ready 接口
 
@@ -31,8 +33,10 @@
 
 ### 暂不做
 
-- 增加更多 Specialist 或长期记忆类型；
-- GraphRAG、多个向量数据库或复杂前端；
+- 为展示数量增加更多 Specialist；
+- GraphRAG、多个向量数据库、无限增长的聊天记录或复杂用户画像；
+- 未经验证自动写入长期记忆，或允许历史记忆覆盖实时证据；
+- 复杂前端；
 - 自研大模型训练；
 - 在没有可靠数据、奖励和 held-out 评测前宣称 Agentic RL 效果。
 
@@ -41,6 +45,12 @@
 ```text
 Environment: Incident Response
         │ task / initial state
+        ▼
+Knowledge & Memory Layer
+        ├── Versioned Corpus → BM25 + Dense → RRF → Reranker → Evidence
+        ├── Working Memory → facts / evidence / plan / unresolved items
+        └── Episodic Memory → verified incidents / tenant / retention
+        │
         ▼
 Durable Runtime ─── Worker lease / checkpoint / cancellation
         │
@@ -57,7 +67,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
         └── trajectory export / replay / shadow comparison
 ```
 
-安全规则、审批、状态转换和幂等键始终位于策略之外，不能由模型或学习策略覆盖。
+安全规则、审批、状态转换、租户范围和幂等键始终位于策略之外，不能由模型、检索结果、历史记忆或学习策略覆盖。
 
 ## 4. 正式评测合同
 
@@ -76,6 +86,8 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 - safe-refusal、false downgrade、evidence completeness；
 - recovery success、duplicate side effects、policy violations；
 - P50/P95 延迟、token、成本和工具 attempts。
+- retrieval Recall@K、MRR、NDCG、引用忠实度与空结果拒答；
+- memory precision、过期信息命中率、跨租户泄漏和历史记忆覆盖实时证据次数。
 
 `pass@k` 只用于“多次尝试至少一次成功”的能力分析，不能替代生产可靠性指标。
 
@@ -92,6 +104,8 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 | held-out | 5 | 不参与策略和 grader 调试的困难保留集 |
 
 每条任务保存 provenance、许可/敏感性标记、reference outcome、grader 版本和人工复核状态。合成数据、公开事故改写和真实脱敏数据分别报告。
+
+RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、时间有效性和不可回答标签；Memory 使用独立的多轮事故序列，覆盖正确召回、过期记忆、冲突证据、跨租户访问与删除后不可召回。检索集、Agent suite 和 held-out 的用途必须分开报告。
 
 ## 6. 实施里程碑
 
@@ -112,7 +126,29 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 验收：新增 case 不改策略代码；每个失败能定位到 grader dimension。
 
-### M3：Worker Control Plane
+### M3：Evaluated RAG Baseline
+
+状态：进行中。已完成版本化合成语料、确定性切分、Hashing Dense、BM25、RRF、30 条 smoke set、评测 CLI 和 Tool Gateway 集成；公开语料、学习型 Embedding、Reranker 与引用忠实度尚未完成。当前数据上 BM25 优于 RRF，Runtime 暂选 BM25，待 Embedding 升级后复评。
+
+- 冻结公开可分享的 Runbook、事故复盘和运维 SOP 语料；
+- 文档解析、chunk metadata、Dense baseline 与带引用 Evidence；
+- 增加 BM25、RRF 和可选 Reranker；
+- 建立独立检索标注集和 Recall@K、MRR、NDCG、引用忠实度报告；
+- 将 `get_runbook` 从确定性数据替换为经过 Tool Gateway 的 `search_knowledge`。
+
+验收：新增文档不改 Agent 代码；每个答案引用可回溯到语料和索引版本；至少完成 Dense、BM25、Hybrid 三组可复现实验。
+
+### M4：Controlled Memory
+
+- 在 Context Engine 上固化结构化 Working Memory：事实、证据、计划、未决问题和最近事件；
+- 仅在任务完成且验证通过后写入 Episodic Memory；
+- 增加 tenant scope、provenance、时间有效性、retention 和删除合同；
+- 历史记忆作为候选 Evidence，不能覆盖本次 Metrics/Logs 等实时事实；
+- 增加冲突、过期、删除和跨租户回归测试。
+
+验收：跨租户泄漏为 0；删除后不可召回；旧事故与实时证据冲突时以实时证据为准并留下 Trace。
+
+### M5：Worker Control Plane
 
 - PostgreSQL store；
 - `FOR UPDATE SKIP LOCKED` 领取任务；
@@ -121,7 +157,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 验收：任意关键 checkpoint 窗口 kill Worker 后可恢复；两个 Worker 不重复完成同一写动作。
 
-### M4：安全 Tool Runtime
+### M6：安全 Tool Runtime
 
 - read/write 风险分级、per-agent allowlist、per-task identity；
 - scoped credential、审批与 action 参数绑定；
@@ -130,7 +166,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 验收：未审批写入、跨租户访问和被篡改 action 始终被阻止并产生审计事件。
 
-### M5：Observability、Replay 与真实连接器
+### M7：Observability、Replay 与真实连接器
 
 - OpenTelemetry exporter 与版本化 span attributes；
 - deterministic tool replay、shadow policy diff；
@@ -139,7 +175,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 验收：可从 trace 还原任务决策和副作用；新旧策略在同一 suite 上生成可比较报告。
 
-### M6：Learning-ready Boundary
+### M8：Learning-ready Boundary
 
 - 稳定 JSONL trajectory schema；
 - reward/evaluator hook 与 policy registry；
@@ -151,7 +187,7 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 ## 7. 双项目边界
 
-本仓库只解决生产 Agent 的可靠执行与评测。Agentic RL 作为独立项目 `coding-agent-rl-lab` 维护，负责 Coding Task、sandbox、executable verifier、rollout、reward 和策略优化。
+本仓库只解决生产 Agent 的可追溯知识获取、受控记忆、可靠执行与评测。Agentic RL 作为独立项目 `coding-agent-rl-lab` 维护，负责 Coding Task、sandbox、executable verifier、rollout、reward 和策略优化。
 
 两者未来只通过版本化 JSON 合同可选对接，不能产生运行时依赖，也不共享业务实现。这样可以分别验证系统工程能力与学习闭环，避免运维合成数据和训练逻辑污染 Durable Runtime 的产品边界。
 
@@ -161,6 +197,8 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 - 60 条审核任务可重复运行并生成版本化报告；
 - 至少 3 次重复评测能报告 `pass^3` 与失败分布；
+- 独立检索集完成 Dense、BM25、Hybrid 和 Rerank 对比，答案引用可回溯到语料与索引版本；
+- Working Memory 压缩后保留必需事实，Episodic Memory 满足租户隔离、过期和删除合同；
 - 进程崩溃、工具超时、响应丢失和双 Worker 竞争均有恢复测试；
 - 重复高风险副作用为 0，未审批写操作阻断率为 100%；
 - 至少一个真实观测数据源和一个真实写连接器；
@@ -171,7 +209,9 @@ Task → Trial → Transcript + Outcome → Graders → Suite Report
 
 按优先级执行：
 
-1. 人工复核 15 条 synthetic draft，必要时修正 reference outcome、工具范围与 provenance；
-2. 将 held-out 从 2 条扩至目标 5 条，并逐步把总审核集扩至 60 条；
-3. 基于已提交的 Benchmark v4 报告追踪 grader dimension 失败，不以 synthetic 1.0 宣称泛化；
-4. 数据合同稳定后开始 PostgreSQL + Worker lease，避免同时扩数据与改运行时导致问题难以归因。
+1. 冻结首批公开运维语料及其许可、来源、文档版本和元数据合同；
+2. 建立 30 条人工核对的检索 smoke set，实现 Dense baseline 与带来源 Evidence；
+3. 增加 BM25、RRF 和 Reranker 对比，把结果写入 `evaluation.md`；
+4. 用真实 `search_knowledge` 替换确定性 `get_runbook`，接入现有 Tool Gateway、Trace 和 Verifier；
+5. 完成 Working Memory，再实现只保存已验证事故的最小 Episodic Memory；
+6. 同步人工复核现有 15 条 Agent synthetic draft；数据合同稳定后再开始 PostgreSQL + Worker lease。

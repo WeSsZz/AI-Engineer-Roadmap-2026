@@ -9,6 +9,14 @@ description = "A dependency-light, evaluation-friendly enterprise multi-agent ha
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+bge = [
+  "FlagEmbedding==1.4.0",
+  "huggingface-hub==0.36.2",
+  "torch>=2.6,<3",
+  "transformers==4.57.6",
+]
+
 [project.scripts]
 enterprise-agent = "enterprise_agent.__main__:main"
 
@@ -16,7 +24,12 @@ enterprise-agent = "enterprise_agent.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-enterprise_agent = ["suites/**/*.json", "suites/**/*.jsonl"]
+enterprise_agent = [
+  "suites/**/*.json",
+  "suites/**/*.jsonl",
+  "corpora/**/*.json",
+  "retrieval_suites/**/*.json",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

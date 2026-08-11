@@ -4,13 +4,14 @@
 
 构建一个面向企业知识库、业务查询和运维故障分析的可靠 Agent Runtime，重点展示：
 
-- 可评测的检索优化
+- 可评测的混合检索、重排与证据引用
+- 结构化 Working Memory 与受控 Episodic Memory
 - Multi-Agent 编排与证据验证
 - 可恢复的任务执行
 - 可靠工具调用与人工审批
 - 上下文管理、Trace 和故障恢复
 
-项目重点不是“多个模型互相聊天”，而是让一次 Agent 任务具备清晰的执行状态、权限边界、证据链、checkpoint、进程重启恢复和写操作幂等语义。
+项目重点不是“多个模型互相聊天”，而是让 Agent 获得正确、可追溯的上下文，并让一次任务具备清晰的执行状态、权限边界、证据链、checkpoint、进程重启恢复和写操作幂等语义。RAG 与 Memory 都必须经过 Tool Gateway、租户范围、Trace 和评测约束，不能成为绕过安全边界的旁路。
 
 ## 当前可运行基线
 
@@ -53,6 +54,26 @@
 - `incident-diagnosis-v2` 包含 20 条分层 case：development 6、regression 4、security 4、recovery 4、held-out 2
 - 原有 5 条标记为人工审核；新增 15 条 synthetic draft 明确标记为待人工复核
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
+- 版本化 `incident-runbooks:1.0.0` 合成语料、稳定 chunk ID 和严格字段校验
+- 依赖无关的 Hashing Dense、BM25 与 RRF Hybrid 三组基线，明确不把 hashing 冒充学习型语义 Embedding
+- 可选的 BGE-M3 学习型 Dense Provider：固定模型 revision、批量编码、SQLite 向量缓存，默认安装和 Runtime 均不加载模型
+- 检索报告分开记录模型加载、建索引和查询延迟，并保存 Embedding 指纹与缓存命中数据
+- 30 条独立 retrieval smoke set 与 Recall@5、MRR、NDCG、空结果准确率、延迟报告
+- `search_knowledge` 通过 Tool Gateway 执行租户/元数据过滤，并将索引版本、分数和来源写入 Evidence
+- 原 `get_runbook` 已成为版本化检索索引的兼容适配器，现有 Agent suite 与故障注入合同保持稳定
+
+## 当前能力边界
+
+RAG 的确定性 R0–R2 基线和可选的 BGE-M3 对比链路已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
+
+- 公开许可语料的 Markdown/PDF 解析与持久化近似向量索引
+- Cross-Encoder Reranker 与经过真实、人工审核数据验证的 Hybrid 链路
+- 80–100 条人工审核的开发/保留检索集与引用忠实度评测
+- 跨任务 Episodic Memory 的写入、检索、过期、删除和租户隔离
+
+当前 R0–R2 和 BGE-M3 对比仍使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称生产语义检索效果。`search_knowledge` 仍默认 BM25；只有学习型 Dense/Hybrid 在人工审核的真实语料和保留集上稳定胜出后才会切换。`Context Engine` 只提供当前任务的结构化上下文压缩，不能等同于长期记忆。
+
+当前 4 条 negative retrieval case 验证的是 tenant/metadata scope 下必须返回空结果，不足以衡量“同租户但知识库没有答案”的语义拒答能力；报告里的 `no_answer_accuracy` 不能扩展解释为完整的不可回答检测率。
 
 当前演示任务：
 
@@ -141,6 +162,32 @@ PYTHONPATH=src python -m enterprise_agent benchmark \
   --output work/benchmark-report.json
 ```
 
+运行当前确定性 Dense 检索基线：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent retrieval-benchmark \
+  --strategy bm25 \
+  --output work/retrieval-baseline.json
+```
+
+`--strategy` 支持 `dense`、`bm25` 和 `hybrid`。默认加载 10 份项目自编合成文档和 30 条 retrieval smoke case。报告会记录语料、suite、Embedding 和索引版本；也可以用 `--corpus`、`--suite` 和 `--top-k` 加载外部版本化数据。
+
+运行真实的 BGE-M3 Dense 对比（首次运行会下载约 2 GB 权重；核心安装和默认测试不需要这些依赖）：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[bge]'
+
+.venv/bin/python -m enterprise_agent retrieval-benchmark \
+  --strategy dense \
+  --embedding-provider bge-m3 \
+  --embedding-revision 5617a9f61b028005a4858fdac845db406aefb181 \
+  --embedding-max-length 512 \
+  --output work/retrieval-bge-m3.json
+```
+
+模型 revision 是固定的，不会静默跟随 `main`；语料向量缓存在 `work/retrieval-embeddings.sqlite3`，查询始终现场编码，避免缓存命中污染 P50/P95。再次用 `--strategy hybrid` 会复用同一批语料向量。BGE-M3 仍是内存精确扫描，不等于已完成生产向量数据库；报告中的 `setup` 与查询 P50/P95 也应分开解读。
+
 只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
 也可以加载一个外部 suite 文件或目录；新增 case 不需要修改策略代码：
@@ -211,8 +258,12 @@ enterprise-agent/
 │   ├── tracing.py         # Span 生命周期、工具调用转换和父子链路
 │   ├── tool_gateway.py    # Schema、策略、重试、限流、熔断和调用记录
 │   ├── faults.py          # 确定性工具故障注入
- │   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
- │   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
+│   ├── routing.py         # 共享风险路由策略与 fail-closed 决策合同
+│   ├── retrieval.py       # 语料合同、切分、Dense baseline 与检索评测
+│   ├── embeddings.py      # 可选 BGE-M3 Provider、版本固定与 SQLite 向量缓存
+│   ├── corpora/           # 版本化知识语料
+│   ├── retrieval_suites/  # 独立检索评测集
+│   ├── benchmark.py       # 数据集、五种策略、配对评分与报告
  │   ├── evals.py           # Task/Trial/Outcome/Grader/Suite 合同与可靠性指标
  │   ├── suite_loader.py    # JSON/JSONL suite 读取与版本化 Schema 校验
  │   ├── graders.py         # outcome/evidence/safety/recovery 独立 grader
@@ -239,6 +290,7 @@ enterprise-agent/
 - [`docs/adaptive-routing.md`](docs/adaptive-routing.md)：Shadow/Active 路由、恢复语义与上线门槛
 - [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
 - [`docs/model-provider.md`](docs/model-provider.md)：DeepSeek 配置、结构化契约和失败语义
+- [`docs/rag-memory.md`](docs/rag-memory.md)：RAG、Working Memory、Episodic Memory 的范围、合同与实施顺序
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -246,16 +298,18 @@ enterprise-agent/
 - 先建立可运行、可恢复的 baseline，再增加复杂模块。
 - 所有优化同时报告质量、延迟、成本和故障恢复指标。
 - Multi-Agent 必须与单 Agent/Workflow baseline 做实验比较。
+- RAG 必须比较 Dense、BM25、Hybrid 与 Rerank baseline，并保留语料和索引版本。
+- Memory 只保存有来源、可隔离、可过期和可删除的信息；历史记忆不能覆盖本次实时证据。
 - 工具默认最小权限；只读和写入工具分级管理。
 - 评测结果和简历数字必须由可复现实验产生。
 
 ## 下一阶段
 
-1. 人工复核新增 15 条 synthetic draft，冻结 reference outcome、权限边界和 provenance。
-2. 在不复制模板的前提下继续扩至 60 条审核任务。
-3. 增加 PostgreSQL、Worker lease、heartbeat、deadline、取消传播和分布式抢占。
-4. 增加 OpenTelemetry exporter、离线 replay 和真实 Prometheus/Logs/Ticketing 适配器。
-5. 导出稳定 trajectory schema 与 evaluator hooks，但不在本项目实现 RL Trainer。
+1. 冻结一组公开、可分享的 Runbook、事故复盘和运维 SOP 语料，并建立首批检索标注集。
+2. 用公开许可语料和学习型 Embedding 替换当前合成/hashing 基线，再增加 Reranker 和引用忠实度评测。
+3. 在现有 Context Engine 上完成 Working Memory，并增加仅写入已验证事故的 Episodic Memory 最小闭环。
+4. 人工复核新增 15 条 synthetic draft，并将 Agent 与检索评测集分别扩展，避免用同一数据同时调策略和宣称效果。
+5. 数据合同稳定后增加 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。
 
 完整升级边界、里程碑与停止条件见 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)。
 
