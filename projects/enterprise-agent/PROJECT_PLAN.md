@@ -128,13 +128,14 @@ RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、
 
 ### M3：Evaluated RAG Baseline
 
-状态：进行中。已完成版本化合成语料、确定性切分、Hashing Dense、BM25、RRF、30 条 smoke set、评测 CLI 和 Tool Gateway 集成；公开语料、学习型 Embedding、Reranker 与引用忠实度尚未完成。当前数据上 BM25 优于 RRF，Runtime 暂选 BM25，待 Embedding 升级后复评。
+状态：进行中。公开 Markdown 摄取和五组可复现检索基线已完成；BGE-M3 Dense 在当前公开草案 smoke set 上排名最高。因为问题来源于语料本身、尚无人工 held-out、同域语义 hard negative、Reranker 或引用忠实度评测，这些数字不能作为生产质量结论，Runtime 仍暂选 BM25。
 
-- 冻结公开可分享的 Runbook、事故复盘和运维 SOP 语料；
-- 文档解析、chunk metadata、Dense baseline 与带引用 Evidence；
-- 增加 BM25、RRF 和可选 Reranker；
-- 建立独立检索标注集和 Recall@K、MRR、NDCG、引用忠实度报告；
-- 将 `get_runbook` 从确定性数据替换为经过 Tool Gateway 的 `search_knowledge`。
+- [x] 固定 Kubernetes 与 Prometheus 的 20 篇官方文档、许可、提交与内容哈希；
+- [x] 完成 frontmatter 规范化、Markdown 标题切分、chunk metadata 与带引用 Evidence；
+- [x] 完成 Hashing Dense、BM25、RRF、BGE-M3 Dense/Hybrid 五组公开语料报告；
+- [x] 将 `get_runbook` 兼容到经过 Tool Gateway 的 `search_knowledge`；
+- [ ] 独立人工复核并冻结 development/held-out 检索集，增加多相关文档判断；
+- [ ] 增加同域语义拒答、Reranker 与引用忠实度评测。
 
 验收：新增文档不改 Agent 代码；每个答案引用可回溯到语料和索引版本；至少完成 Dense、BM25、Hybrid 三组可复现实验。
 
@@ -211,8 +212,8 @@ RAG 使用独立的 80–100 条检索标注问题，保存相关文档/chunk、
 
 按优先级执行：
 
-1. 冻结首批公开运维语料及其许可、来源、文档版本和元数据合同；
-2. 用公开语料和学习型 Embedding 复评 Dense、BM25、RRF，再增加 Reranker 与引用忠实度；
+1. 人工复核首批公开语料的来源导出问题，并冻结独立 held-out 与同域语义 hard negative；
+2. 在同一冻结语料上增加 Reranker、多相关文档判断与引用忠实度；
 3. 为 Memory 建立独立多轮 suite，加入语义相似召回、Episode 版本替换和更多人工审核冲突样本；
 4. 同步人工复核现有 15 条 Agent synthetic draft，保持 Agent、检索和 Memory 评测集相互独立；
 5. 数据合同稳定后开始 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。

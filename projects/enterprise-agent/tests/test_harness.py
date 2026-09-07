@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -163,14 +164,14 @@ class HarnessTests(unittest.TestCase):
 
             interrupted = SQLiteEventStore(database).load(pending.task.task_id)
             self.assertEqual(interrupted.state.status, TaskStatus.EXECUTING_ACTION)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 ticket_count_before_resume = connection.execute("SELECT COUNT(*) FROM demo_tickets").fetchone()[0]
             self.assertEqual(ticket_count_before_resume, 1)
 
             completed = EnterpriseAgentHarness(store=SQLiteEventStore(database)).resume(pending.task.task_id)
             self.assertEqual(completed.state.status, TaskStatus.COMPLETED)
             self.assertTrue(completed.state.artifacts["ticket"]["replayed"])
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 ticket_count_after_resume = connection.execute("SELECT COUNT(*) FROM demo_tickets").fetchone()[0]
             self.assertEqual(ticket_count_after_resume, 1)
 

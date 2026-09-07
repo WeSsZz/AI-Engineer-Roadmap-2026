@@ -30,6 +30,48 @@ class CLITests(unittest.TestCase):
         for strategy in ("dense", "bm25", "hybrid"):
             args = parser.parse_args(["retrieval-benchmark", "--strategy", strategy])
             self.assertEqual(args.strategy, strategy)
+        learned = parser.parse_args(
+            [
+                "retrieval-benchmark",
+                "--strategy",
+                "hybrid",
+                "--embedding-model",
+                "BAAI/bge-m3",
+                "--embedding-revision",
+                "a" * 40,
+                "--embedding-local-path",
+                "work/models/bge-m3",
+                "--embedding-device",
+                "cuda",
+                "--omit-result-text",
+            ]
+        )
+        self.assertEqual(learned.embedding_model, "BAAI/bge-m3")
+        self.assertEqual(learned.embedding_revision, "a" * 40)
+        self.assertEqual(learned.embedding_device, "cuda")
+
+        self.assertFalse(learned.include_result_text)
+        self.assertEqual(learned.embedding_local_path, "work/models/bge-m3")
+
+    def test_corpus_build_parser_exposes_reproducibility_controls(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(
+            [
+                "corpus-build",
+                "--manifest",
+                "manifest.json",
+                "--cache-dir",
+                "work/cache",
+                "--output",
+                "work/corpus.json",
+                "--offline",
+                "--overwrite",
+            ]
+        )
+        self.assertEqual(args.manifest, "manifest.json")
+        self.assertTrue(args.offline)
+        self.assertTrue(args.overwrite)
+
 
     def test_run_and_memory_commands_require_explicit_tenant_scope(self) -> None:
         parser = cli.build_parser()
@@ -101,6 +143,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(report["corpus_version"], "incident-runbooks:1.0.0")
         self.assertEqual(report["suite_version"], "incident-retrieval-smoke:1.0.0")
         self.assertEqual(report["case_count"], 30)
+        self.assertEqual(report["source_licenses"], [])
 
     def test_benchmark_does_not_initialize_the_task_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

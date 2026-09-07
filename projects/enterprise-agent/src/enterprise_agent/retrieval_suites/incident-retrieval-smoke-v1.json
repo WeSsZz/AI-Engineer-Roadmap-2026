@@ -2,6 +2,7 @@
   "suite_id": "incident-retrieval-smoke",
   "version": "1.0.0",
   "corpus": "incident-runbooks:1.0.0",
+  "corpus_sha256": "230f706a3ed39b3d7c67ed20a04d2cd6dd9e9f21e4ef036008a606ce2c049138",
   "cases": [
     {"case_id": "payment-pool-zh", "query": "payment-api 连接池耗尽应该怎么处理", "tenant_id": "demo", "relevant_document_ids": ["runbook-payment-db-pool-v3"], "filters": {"service": "payment-api", "symptom": "database_pool_exhaustion"}},
     {"case_id": "payment-pool-code", "query": "Payment DB_POOL_TIMEOUT HTTP 503 runbook", "tenant_id": "demo", "relevant_document_ids": ["runbook-payment-db-pool-v3"], "filters": {"service": "payment-api", "symptom": "database_pool_exhaustion"}},

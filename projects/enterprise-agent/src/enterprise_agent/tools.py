@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
 
@@ -47,7 +48,7 @@ def build_demo_runtime(
     in_memory_tickets: dict[str, dict[str, Any]] = {}
     if ticket_database is not None:
         ticket_database.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(ticket_database) as connection:
+        with closing(sqlite3.connect(ticket_database)) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS demo_tickets (
@@ -400,7 +401,7 @@ def build_demo_runtime(
             else:
                 replayed = True
         else:
-            with sqlite3.connect(ticket_database, timeout=5.0) as connection:
+            with closing(sqlite3.connect(ticket_database, timeout=5.0)) as connection, connection:
                 connection.row_factory = sqlite3.Row
                 existing = connection.execute(
                     "SELECT id, title, description FROM demo_tickets WHERE idempotency_key = ?",

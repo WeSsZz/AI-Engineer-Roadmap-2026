@@ -7,13 +7,27 @@ RAG 为事故诊断提供可回溯的企业知识证据；Memory 为当前任务
 ## 当前状态
 
 - 已有结构化 Working Memory：保存当前任务的事实、证据、计划、未决项和冻结的历史候选 ID，模型视图不包含 Runtime artifacts。
-- 已有版本化 JSON 语料、严格 Schema、确定性切分和稳定 chunk ID。
+- 已有版本化合成语料，以及从固定 Git 对象离线重建的 20 篇公开许可 Markdown 文档；严格 Schema、内容哈希、确定性切分和稳定 chunk ID 均已落地。
 - 已有 Hashing Dense、BM25、RRF Hybrid 三组 baseline、30 条 retrieval smoke set 和独立评测 CLI。
+- 已有可选 Sentence Transformers Provider；只接受不可变 revision 与本地快照，逐文件校验 Hugging Face tree 元数据并在报告中记录模型 artifact SHA-256、文件数、维度、设备、索引版本和构建耗时。
+- 已有 44 条公开语料 draft case、语料/suite SHA-256 强绑定、文档级指标和默认脱敏报告。
 - 已有 `search_knowledge` Tool Gateway 工具；`get_runbook` 是其兼容适配器。
 - 已有 SQLite Episodic Memory v1：只写已完成且验证通过的高置信事故，支持租户隔离、provenance、有效期、软删除和原子终态提交。
-- Hashing baseline 不是学习型语义 Embedding；尚无公开语料解析、持久化向量索引、Reranker、语义 Memory Search 或 Episode 版本替换。
+- 尚无 PDF/站点模板语义解析、持久化向量索引、Reranker、语义 Memory Search 或 Episode 版本替换。
 
-当前合成 smoke set 上 BM25 的 MRR/NDCG 高于 Hashing Dense 和 RRF，Runtime 因此暂时选择 BM25。该选择只对当前版本数据成立；接入学习型 Embedding 和公开语料后必须重新比较。
+### 当前检索对比
+
+| 方法 | Recall@5 | MRR | NDCG@5 | Serving P95 |
+| --- | ---: | ---: | ---: | ---: |
+| Hashing Dense | 0.8000 | 0.6050 | 0.6541 | 10.484 ms |
+| BM25 | 0.9750 | 0.8854 | 0.9081 | 3.176 ms |
+| Hashing Hybrid RRF | 0.9250 | 0.7654 | 0.8053 | 14.546 ms |
+| BGE-M3 Dense | 1.0000 | 0.9875 | 0.9908 | 36.481 ms |
+| BGE-M3 Hybrid RRF | 1.0000 | 0.9750 | 0.9815 | 39.359 ms |
+
+BGE-M3 使用 revision `5617a9f61b028005a4858fdac845db406aefb181`、artifact SHA-256 `8676d69f6b957059fa23267d55e5dd4d01fd07af1a62fb29b122ac34994ed18e`、1024 维归一化向量和 CUDA；本机为 Windows + NVIDIA RTX 5070 Ti Laptop GPU。完整报告位于 `benchmarks/retrieval-public-ops-*-v2.json`。
+
+这些数字来自 Kubernetes/Prometheus 的 20 篇官方文档、40 条来源导出正例和 4 条范围隔离负例，只运行一次且延迟依赖本机环境。全部方法的范围隔离准确率均为 1.0，但当前没有同 tenant、同 product 的语义 hard negative，所以 `semantic_no_answer_accuracy` 为 `null`。问题尚未独立出题或盲审，也没有 pooled judgment/held-out 集；只能说明 BGE-M3 Dense 在这套 draft smoke set 上排名最高，不能外推为生产质量结论。
 
 ## RAG 合同
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,7 @@ class SQLiteEventStore:
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -105,7 +106,7 @@ class SQLiteEventStore:
             )
 
     def start_span(self, span: TraceSpan) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO spans(
@@ -126,7 +127,7 @@ class SQLiteEventStore:
         attributes: dict[str, Any],
         error_type: str | None = None,
     ) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 UPDATE spans
@@ -146,7 +147,7 @@ class SQLiteEventStore:
                 raise KeyError(f"Unknown span: {span_id}")
 
     def record_span(self, span: TraceSpan) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO spans(
@@ -158,7 +159,7 @@ class SQLiteEventStore:
             )
 
     def list_spans(self, task_id: str) -> list[TraceSpan]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT * FROM spans WHERE task_id = ? ORDER BY started_at, span_id",
                 (task_id,),
@@ -239,7 +240,7 @@ class SQLiteEventStore:
 
     def create(self, execution: StoredExecution) -> None:
         snapshot = self._encode_snapshot(execution)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "INSERT INTO tasks(task_id, status, version, snapshot_json) VALUES (?, ?, ?, ?)",
                 (execution.task.task_id, execution.state.status.value, execution.state.version, snapshot),
@@ -252,7 +253,7 @@ class SQLiteEventStore:
         execution.state.version = next_version
         snapshot = self._encode_snapshot(execution)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection, connection:
                 cursor = connection.execute(
                     """
                     UPDATE tasks
@@ -277,7 +278,7 @@ class SQLiteEventStore:
             raise
 
     def load(self, task_id: str) -> StoredExecution:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute("SELECT snapshot_json FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
             if row is None:
                 raise TaskNotFoundError(task_id)
@@ -299,7 +300,7 @@ class SQLiteEventStore:
         return execution
 
     def list_tasks(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT task_id, status, version, created_at, updated_at FROM tasks ORDER BY created_at DESC"
             ).fetchall()

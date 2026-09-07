@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -213,7 +214,7 @@ class SQLiteMemoryStore:
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS episodic_memories (
@@ -252,7 +253,7 @@ class SQLiteMemoryStore:
             )
 
     def remember(self, memory: EpisodicMemory) -> MemoryWriteResult:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             return self.remember_in_transaction(connection, memory)
 
     def finalize_execution(
@@ -274,7 +275,7 @@ class SQLiteMemoryStore:
         execution.state.version = next_version
         snapshot = event_store._encode_snapshot(execution)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection, connection:
                 connection.execute("PRAGMA foreign_keys=ON")
                 cursor = connection.execute(
                     """
@@ -350,7 +351,7 @@ class SQLiteMemoryStore:
     ) -> EpisodicMemory | None:
         tenant_id = _required_text(tenant_id, "tenant_id")
         deleted_clause = "" if include_deleted else " AND deleted_at IS NULL"
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 f"SELECT * FROM episodic_memories WHERE memory_id = ? AND tenant_id = ?{deleted_clause}",
                 (memory_id, tenant_id),
@@ -366,7 +367,7 @@ class SQLiteMemoryStore:
     ) -> EpisodicMemory | None:
         tenant_id = _required_text(tenant_id, "tenant_id")
         current_time = _as_utc(now or datetime.now(UTC)).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 """
                 SELECT * FROM episodic_memories
@@ -415,7 +416,7 @@ class SQLiteMemoryStore:
             + " AND ".join(clauses)
             + " ORDER BY created_at DESC, memory_id LIMIT ?"
         )
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(query, parameters).fetchall()
         return [self._decode(row) for row in rows]
 
@@ -428,7 +429,7 @@ class SQLiteMemoryStore:
     ) -> bool:
         tenant_id = _required_text(tenant_id, "tenant_id")
         timestamp = _as_utc(deleted_at or datetime.now(UTC)).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 UPDATE episodic_memories
@@ -442,7 +443,7 @@ class SQLiteMemoryStore:
     def count(self, *, tenant_id: str, include_deleted: bool = False) -> int:
         tenant_id = _required_text(tenant_id, "tenant_id")
         deleted_clause = "" if include_deleted else " AND deleted_at IS NULL"
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 f"SELECT COUNT(*) AS count FROM episodic_memories WHERE tenant_id = ?{deleted_clause}",
                 (tenant_id,),

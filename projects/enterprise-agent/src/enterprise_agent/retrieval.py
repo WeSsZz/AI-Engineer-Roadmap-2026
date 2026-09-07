@@ -82,6 +82,7 @@ class EmbeddingProvider(Protocol):
     dimensions: int
 
     def embed(self, text: str) -> tuple[float, ...]: ...
+    def embed_many(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]: ...
 
 
 class HashingEmbeddingProvider:
@@ -106,6 +107,98 @@ class HashingEmbeddingProvider:
         if norm:
             vector = [value / norm for value in vector]
         return tuple(vector)
+
+    def embed_many(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
+        return tuple(self.embed(text) for text in texts)
+
+
+class SentenceTransformerEmbeddingProvider:
+    """Optional learned embedding provider backed by sentence-transformers."""
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        model_path: str | Path | None = None,
+        revision: str,
+        device: str | None = None,
+        batch_size: int = 32,
+    ) -> None:
+        if not model_name.strip():
+            raise ValueError("embedding model name must not be empty")
+        if not isinstance(revision, str):
+            raise ValueError("embedding model revision is required")
+        revision = revision.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+            raise ValueError(
+                "embedding model revision must be an immutable 40- or 64-character hex commit"
+            )
+        if batch_size <= 0:
+            raise ValueError("embedding batch size must be positive")
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "learned embeddings require the optional 'rag' dependencies; "
+                "install with 'pip install -e .[rag]'"
+            ) from exc
+
+        if model_path is None:
+            raise ValueError(
+                "learned embedding benchmarks require --embedding-local-path"
+            )
+        local_path = Path(model_path)
+        if not local_path.is_dir():
+            raise ValueError(f"embedding model directory does not exist: {local_path}")
+        artifact_sha256, artifact_files = _directory_fingerprint(local_path, revision)
+        load_target = str(local_path)
+        self.model_name = model_name
+        self.revision = revision
+        self.batch_size = batch_size
+        self.name = f"sentence-transformers:{model_name}@{revision}#sha256:{artifact_sha256}"
+        self.artifact_sha256 = artifact_sha256
+        self.artifact_file_count = artifact_files
+        try:
+            self._model = SentenceTransformer(
+                load_target,
+                revision=revision,
+                device=device,
+            )
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError(
+                f"failed to load embedding model {model_name!r} from {load_target!r}: {exc}"
+            ) from exc
+        self.device = str(self._model.device)
+        dimension_getter = getattr(self._model, "get_embedding_dimension", None)
+        if dimension_getter is None:
+            dimension_getter = self._model.get_sentence_embedding_dimension
+        dimensions = dimension_getter()
+        if not isinstance(dimensions, int) or dimensions <= 0:
+            raise RuntimeError(f"embedding model {model_name!r} did not report valid dimensions")
+        self.dimensions = dimensions
+
+    def embed(self, text: str) -> tuple[float, ...]:
+        return self.embed_many((text,))[0]
+
+    def embed_many(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
+        values = tuple(texts)
+        if not values:
+            return ()
+        encoded = self._model.encode(
+            list(values),
+            batch_size=self.batch_size,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        vectors = tuple(tuple(float(value) for value in vector) for vector in encoded)
+        if len(vectors) != len(values):
+            raise RuntimeError(
+                f"embedding model returned {len(vectors)} vectors for {len(values)} texts"
+            )
+        if any(len(vector) != self.dimensions for vector in vectors):
+            raise RuntimeError("embedding model returned an unexpected vector dimension")
+        return vectors
 
 
 class DeterministicChunker:
@@ -159,15 +252,15 @@ class DenseKnowledgeIndex:
         chunks: Iterable[KnowledgeChunk],
         *,
         embedding_provider: EmbeddingProvider | None = None,
-        index_version: str = "dense-hashing-v1",
+        index_version: str = "dense-content-v2",
     ):
         self.embedding_provider = embedding_provider or HashingEmbeddingProvider()
         self.index_version = index_version
         self.chunks = tuple(chunks)
         if not self.chunks:
             raise ValueError("knowledge index requires at least one chunk")
-        self._vectors = tuple(
-            self.embedding_provider.embed(_indexable_text(chunk)) for chunk in self.chunks
+        self._vectors = self.embedding_provider.embed_many(
+            tuple(_indexable_text(chunk) for chunk in self.chunks)
         )
 
     def search(
@@ -218,7 +311,7 @@ class BM25KnowledgeIndex:
         self,
         chunks: Iterable[KnowledgeChunk],
         *,
-        index_version: str = "bm25-v1",
+        index_version: str = "bm25-content-v2",
         k1: float = 1.5,
         b: float = 0.75,
     ):
@@ -296,7 +389,7 @@ class ReciprocalRankFusionIndex:
         bm25: BM25KnowledgeIndex,
         *,
         rrf_k: int = 60,
-        index_version: str = "hybrid-rrf-v1",
+        index_version: str = "hybrid-document-rrf-v2",
     ):
         if rrf_k <= 0:
             raise ValueError("rrf_k must be positive")
@@ -320,42 +413,52 @@ class ReciprocalRankFusionIndex:
     ) -> tuple[RetrievalResult, ...]:
         _validate_search(query, tenant_id, top_k)
         candidate_k = max(top_k * 4, 20)
+        component_top_k = len(self.chunks)
         dense_results = self.dense.search(
             query,
             tenant_id=tenant_id,
-            top_k=candidate_k,
+            top_k=component_top_k,
             filters=filters,
             min_score=min_score,
         )
         bm25_results = self.bm25.search(
             query,
             tenant_id=tenant_id,
-            top_k=candidate_k,
+            top_k=component_top_k,
             filters=filters,
             min_score=min_score,
         )
-        chunks: dict[str, KnowledgeChunk] = {}
+        documents: dict[str, KnowledgeChunk] = {}
+        representative_ranks: dict[str, int] = {}
         scores: dict[str, float] = {}
         component_ranks: dict[str, dict[str, float]] = {}
         for method, results in (("dense", dense_results), ("bm25", bm25_results)):
-            for result in results:
-                chunk_id = result.chunk.chunk_id
-                chunks[chunk_id] = result.chunk
-                scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (self.rrf_k + result.rank)
-                component_ranks.setdefault(chunk_id, {})[f"{method}_rank"] = float(result.rank)
-                component_ranks[chunk_id][f"{method}_score"] = result.score
+            unique_results = _unique_document_results(results, top_k=candidate_k)
+            for document_rank, result in enumerate(unique_results, start=1):
+                document_id = result.chunk.document_id
+                if document_rank < representative_ranks.get(document_id, math.inf):
+                    documents[document_id] = result.chunk
+                    representative_ranks[document_id] = document_rank
+                scores[document_id] = (
+                    scores.get(document_id, 0.0)
+                    + 1.0 / (self.rrf_k + document_rank)
+                )
+                component_ranks.setdefault(document_id, {})[
+                    f"{method}_rank"
+                ] = float(document_rank)
+                component_ranks[document_id][f"{method}_score"] = result.score
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:top_k]
         return tuple(
             RetrievalResult(
-                chunk=chunks[chunk_id],
+                chunk=documents[document_id],
                 score=round(score, 6),
                 rank=rank,
                 embedding_provider=self.embedding_provider.name,
                 index_version=self.index_version,
                 retrieval_method=self.retrieval_method,
-                component_scores=component_ranks[chunk_id],
+                component_scores=component_ranks[document_id],
             )
-            for rank, (chunk_id, score) in enumerate(ranked, start=1)
+            for rank, (document_id, score) in enumerate(ranked, start=1)
         )
 
 
@@ -385,11 +488,41 @@ def load_corpus(path: str | Path = DEFAULT_CORPUS_PATH) -> tuple[str, tuple[Know
 
 def load_retrieval_suite(
     path: str | Path = DEFAULT_RETRIEVAL_SUITE_PATH,
+    *,
+    expected_corpus: str | None = None,
+    known_document_ids: Iterable[str] | None = None,
+    expected_corpus_sha256: str | None = None,
 ) -> tuple[str, tuple[RetrievalCase, ...]]:
     payload = _load_json(path)
-    _require_exact_keys(payload, {"suite_id", "version", "corpus", "cases"}, "suite")
+    suite_fields = {"suite_id", "version", "corpus", "cases"}
+    if "corpus_sha256" in payload:
+        suite_fields.add("corpus_sha256")
+    _require_exact_keys(payload, suite_fields, "suite")
     suite_id = _non_empty_string(payload["suite_id"], "suite.suite_id")
     version = _non_empty_string(payload["version"], "suite.version")
+    declared_corpus = _non_empty_string(payload["corpus"], "suite.corpus")
+    if expected_corpus is not None and declared_corpus != expected_corpus:
+        raise ValueError(
+            f"retrieval suite targets {declared_corpus!r}, "
+            f"but the loaded corpus is {expected_corpus!r}"
+        )
+    declared_corpus_sha256 = payload.get("corpus_sha256")
+    if declared_corpus_sha256 is not None:
+        declared_corpus_sha256 = _non_empty_string(
+            declared_corpus_sha256,
+            "suite.corpus_sha256",
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", declared_corpus_sha256):
+            raise ValueError("suite.corpus_sha256 must be a SHA-256 hex digest")
+    if expected_corpus_sha256 is not None:
+        if declared_corpus_sha256 is None:
+            raise ValueError(
+                "retrieval suite must declare corpus_sha256 when the corpus is validated"
+            )
+        if declared_corpus_sha256 != expected_corpus_sha256.lower():
+            raise ValueError(
+                "retrieval suite corpus_sha256 does not match the loaded corpus"
+            )
     records = payload["cases"]
     if not isinstance(records, list) or not records:
         raise ValueError("suite.cases must be a non-empty array")
@@ -397,27 +530,68 @@ def load_retrieval_suite(
     ids = [case.case_id for case in cases]
     if len(ids) != len(set(ids)):
         raise ValueError("retrieval case_id values must be unique")
+    if known_document_ids is not None:
+        known = set(known_document_ids)
+        referenced = {
+            document_id
+            for case in cases
+            for document_id in case.relevant_document_ids
+        }
+        unknown = sorted(referenced - known)
+        if unknown:
+            raise ValueError(
+                f"retrieval suite references unknown document_id values: {unknown}"
+            )
     return f"{suite_id}:{version}", cases
 
 
-def build_dense_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> DenseKnowledgeIndex:
+def build_dense_index(
+    corpus_path: str | Path = DEFAULT_CORPUS_PATH,
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> DenseKnowledgeIndex:
     corpus_version, chunks = load_corpus_chunks(corpus_path)
-    return DenseKnowledgeIndex(chunks, index_version=f"{corpus_version}:dense-hashing-v1")
+    provider = embedding_provider or HashingEmbeddingProvider()
+    version = (
+        f"{corpus_version}:dense-hashing-content-v2"
+        if isinstance(provider, HashingEmbeddingProvider)
+        else f"{corpus_version}:dense-content-v2:{provider.name}"
+    )
+    return DenseKnowledgeIndex(chunks, embedding_provider=provider, index_version=version)
 
 
 def build_bm25_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> BM25KnowledgeIndex:
     corpus_version, chunks = load_corpus_chunks(corpus_path)
-    return BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-v1")
+    return BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-content-v2")
 
 
-def build_hybrid_index(corpus_path: str | Path = DEFAULT_CORPUS_PATH) -> ReciprocalRankFusionIndex:
+def build_hybrid_index(
+    corpus_path: str | Path = DEFAULT_CORPUS_PATH,
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> ReciprocalRankFusionIndex:
     corpus_version, chunks = load_corpus_chunks(corpus_path)
-    dense = DenseKnowledgeIndex(chunks, index_version=f"{corpus_version}:dense-hashing-v1")
-    bm25 = BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-v1")
+    provider = embedding_provider or HashingEmbeddingProvider()
+    dense_version = (
+        f"{corpus_version}:dense-hashing-content-v2"
+        if isinstance(provider, HashingEmbeddingProvider)
+        else f"{corpus_version}:dense-content-v2:{provider.name}"
+    )
+    dense = DenseKnowledgeIndex(
+        chunks,
+        embedding_provider=provider,
+        index_version=dense_version,
+    )
+    bm25 = BM25KnowledgeIndex(chunks, index_version=f"{corpus_version}:bm25-content-v2")
+    hybrid_version = (
+        f"{corpus_version}:hybrid-document-rrf-v2"
+        if isinstance(provider, HashingEmbeddingProvider)
+        else f"{corpus_version}:hybrid-document-rrf-v2:{provider.name}"
+    )
     return ReciprocalRankFusionIndex(
         dense,
         bm25,
-        index_version=f"{corpus_version}:hybrid-rrf-v1",
+        index_version=hybrid_version,
     )
 
 
@@ -445,19 +619,32 @@ def evaluate_retrieval(
     positive_recalls: list[float] = []
     reciprocal_ranks: list[float] = []
     ndcgs: list[float] = []
-    negative_results: list[bool] = []
-    latencies_ms: list[float] = []
+    scope_results: list[bool] = []
+    semantic_no_answer_results: list[bool] = []
+    serving_latencies_ms: list[float] = []
+    exhaustive_latencies_ms: list[float] = []
+    indexed_tenants = {chunk.tenant_id for chunk in index.chunks}
     for case in cases:
-        case_started = time.perf_counter()
-        results = index.search(
+        filters = case.filters if not case.relevant_document_ids else None
+        serving_started = time.perf_counter()
+        index.search(
             case.query,
             tenant_id=case.tenant_id,
             top_k=top_k,
+            filters=filters,
+        )
+        serving_latencies_ms.append((time.perf_counter() - serving_started) * 1000)
+        exhaustive_started = time.perf_counter()
+        chunk_results = index.search(
+            case.query,
+            tenant_id=case.tenant_id,
+            top_k=max(top_k, len(index.chunks)),
             # Positive cases evaluate ranking across the corpus. Negative cases
             # exercise tenant/metadata scoping and must return no evidence.
-            filters=case.filters if not case.relevant_document_ids else None,
+            filters=filters,
         )
-        latencies_ms.append((time.perf_counter() - case_started) * 1000)
+        results = _unique_document_results(chunk_results, top_k=top_k)
+        exhaustive_latencies_ms.append((time.perf_counter() - exhaustive_started) * 1000)
         retrieved = [result.chunk.document_id for result in results]
         relevant = set(case.relevant_document_ids)
         if relevant:
@@ -467,12 +654,20 @@ def evaluate_retrieval(
             reciprocal_ranks.append(1.0 / first_rank if first_rank else 0.0)
             ndcgs.append(_binary_ndcg(retrieved, relevant))
             passed = bool(hits)
+            case_type = "relevance"
         else:
             passed = not results
-            negative_results.append(passed)
+            is_scope_case = bool(case.filters) or case.tenant_id not in indexed_tenants
+            if is_scope_case:
+                case_type = "scope_isolation"
+                scope_results.append(passed)
+            else:
+                case_type = "semantic_no_answer"
+                semantic_no_answer_results.append(passed)
         rows.append(
             {
                 "case_id": case.case_id,
+                "case_type": case_type,
                 "query": case.query,
                 "relevant_document_ids": list(case.relevant_document_ids),
                 "retrieved_document_ids": retrieved,
@@ -481,20 +676,51 @@ def evaluate_retrieval(
             }
         )
     return {
-        "benchmark_version": "retrieval-benchmark-v1",
+        "benchmark_version": "retrieval-benchmark-v2",
         "retrieval_method": index.retrieval_method,
         "embedding_provider": index.embedding_provider.name if index.embedding_provider else None,
+        "embedding_dimensions": (
+            index.embedding_provider.dimensions if index.embedding_provider else None
+        ),
+        "embedding_artifact_sha256": (
+            getattr(index.embedding_provider, "artifact_sha256", None)
+            if index.embedding_provider
+            else None
+        ),
+        "embedding_artifact_file_count": (
+            getattr(index.embedding_provider, "artifact_file_count", None)
+            if index.embedding_provider
+            else None
+        ),
+        "embedding_device": (
+            getattr(index.embedding_provider, "device", None)
+            if index.embedding_provider
+            else None
+        ),
         "index_version": index.index_version,
         "case_count": len(cases),
         "positive_case_count": len(positive_recalls),
-        "negative_case_count": len(negative_results),
+        "negative_case_count": len(scope_results) + len(semantic_no_answer_results),
+        "scope_case_count": len(scope_results),
+        "semantic_no_answer_case_count": len(semantic_no_answer_results),
         "metrics": {
             f"recall_at_{top_k}": _mean(positive_recalls),
             "mrr": _mean(reciprocal_ranks),
             f"ndcg_at_{top_k}": _mean(ndcgs),
-            "no_answer_accuracy": _mean([float(value) for value in negative_results]),
-            "p50_latency_ms": _percentile(latencies_ms, 0.50),
-            "p95_latency_ms": _percentile(latencies_ms, 0.95),
+            "scope_isolation_accuracy": _mean(
+                [float(value) for value in scope_results]
+            ),
+            "semantic_no_answer_accuracy": _mean(
+                [float(value) for value in semantic_no_answer_results]
+            ),
+            "serving_p50_latency_ms": _percentile(serving_latencies_ms, 0.50),
+            "serving_p95_latency_ms": _percentile(serving_latencies_ms, 0.95),
+            "exhaustive_eval_p50_latency_ms": _percentile(
+                exhaustive_latencies_ms, 0.50
+            ),
+            "exhaustive_eval_p95_latency_ms": _percentile(
+                exhaustive_latencies_ms, 0.95
+            ),
         },
         "elapsed_seconds": round(time.perf_counter() - started, 6),
         "rows": rows,
@@ -512,10 +738,30 @@ def evaluate_dense_retrieval(
     return evaluate_retrieval(index, cases, top_k=top_k)
 
 
-def write_retrieval_report(report: dict[str, Any], path: str | Path) -> None:
+def write_retrieval_report(
+    report: dict[str, Any],
+    path: str | Path,
+    *,
+    include_result_text: bool = True,
+) -> None:
+    payload = {**report, "result_text_included": include_result_text}
+    if not include_result_text:
+        payload["rows"] = [
+            {
+                **row,
+                "results": [
+                    {key: value for key, value in result.items() if key != "text"}
+                    for result in row["results"]
+                ],
+            }
+            for row in report["rows"]
+        ]
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _decode_document(value: Any, index: int) -> KnowledgeDocument:
@@ -560,8 +806,76 @@ def _decode_case(value: Any, index: int) -> RetrievalCase:
 
 
 def _indexable_text(chunk: KnowledgeChunk) -> str:
-    metadata = " ".join(str(value) for value in chunk.metadata.values())
-    return f"{chunk.title} {chunk.text} {metadata}"
+    searchable_metadata = "\n".join(
+        str(chunk.metadata[field])
+        for field in ("service", "symptom")
+        if chunk.metadata.get(field)
+    )
+    values = (chunk.title, chunk.section_path, chunk.text, searchable_metadata)
+    return "\n".join(value for value in values if value)
+
+
+def _directory_fingerprint(path: Path, revision: str) -> tuple[str, int]:
+    tree_path = path / ".cache" / "huggingface" / "trees" / f"{revision}.json"
+    try:
+        tree_payload = json.loads(tree_path.read_text(encoding="utf-8"))
+        tree_files = tree_payload["files"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(
+            f"local model snapshot is missing valid revision metadata: {tree_path}"
+        ) from exc
+    if not isinstance(tree_files, dict):
+        raise ValueError(
+            f"local model revision metadata has invalid files: {tree_path}"
+        )
+    digest = hashlib.sha256()
+    file_count = 0
+    for file in sorted(
+        (candidate for candidate in path.rglob("*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(path).as_posix(),
+    ):
+        relative = file.relative_to(path).as_posix()
+        if relative.startswith(".cache/"):
+            continue
+        if file.is_symlink():
+            raise ValueError(f"embedding model artifact must not be a symlink: {relative}")
+        expected = tree_files.get(relative)
+        if not isinstance(expected, dict):
+            raise ValueError(
+                f"embedding model artifact is absent from revision {revision}: {relative}"
+            )
+        size = file.stat().st_size
+        if expected.get("size") != size:
+            raise ValueError(
+                f"embedding model artifact size mismatch for revision {revision}: {relative}"
+            )
+
+        file_count += 1
+        file_digest = hashlib.sha256()
+        git_digest = hashlib.sha1(f"blob {size}\0".encode("ascii"))
+        with file.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                file_digest.update(block)
+                git_digest.update(block)
+        artifact_digest = file_digest.hexdigest()
+        expected_lfs = expected.get("lfs_sha256")
+        expected_blob = expected.get("blob_id")
+        if expected_lfs is not None:
+            matches_revision = artifact_digest == expected_lfs
+        else:
+            matches_revision = git_digest.hexdigest() == expected_blob
+        if not matches_revision:
+            raise ValueError(
+                f"embedding model artifact does not match revision {revision}: {relative}"
+            )
+
+        encoded_path = relative.encode("utf-8")
+        digest.update(len(encoded_path).to_bytes(8, "big"))
+        digest.update(encoded_path)
+        digest.update(bytes.fromhex(artifact_digest))
+    if file_count == 0:
+        raise ValueError(f"embedding model directory contains no files: {path}")
+    return digest.hexdigest(), file_count
 
 
 def _validate_search(query: str, tenant_id: str, top_k: int) -> None:
@@ -630,6 +944,24 @@ def _binary_ndcg(retrieved: Sequence[str], relevant: set[str]) -> float:
     ideal_hits = min(len(relevant), len(retrieved))
     ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
     return dcg / ideal if ideal else 0.0
+
+
+def _unique_document_results(
+    results: Sequence[RetrievalResult],
+    *,
+    top_k: int,
+) -> tuple[RetrievalResult, ...]:
+    unique: list[RetrievalResult] = []
+    seen: set[str] = set()
+    for result in results:
+        document_id = result.chunk.document_id
+        if document_id in seen:
+            continue
+        seen.add(document_id)
+        unique.append(result)
+        if len(unique) == top_k:
+            break
+    return tuple(unique)
 
 
 def _mean(values: Sequence[float]) -> float | None:

@@ -56,7 +56,10 @@
 - outcome、evidence、safety、recovery 四类 grader 独立评分，Benchmark v4 逐 run 保存 dimension、违规和反馈
 - 版本化 `incident-runbooks:1.0.0` 合成语料、稳定 chunk ID 和严格字段校验
 - 依赖无关的 Hashing Dense、BM25 与 RRF Hybrid 三组基线，明确不把 hashing 冒充学习型语义 Embedding
-- 30 条独立 retrieval smoke set 与 Recall@5、MRR、NDCG、空结果准确率、延迟报告
+- 可选的 Sentence Transformers 学习型 Embedding，已用固定 revision 的 BGE-M3 在 GPU 上完成 Dense 与 Hybrid 可复现实验
+- 30 条合成 retrieval smoke set，以及 20 篇公开许可文档和 44 条来源导出 draft case
+- 固定 Git 提交、逐文件哈希、离线重建、语料/suite 强绑定与模型快照指纹
+- 文档级 Recall@5、MRR、NDCG、范围隔离、语义拒答和 serving/exhaustive 延迟分离报告
 - `search_knowledge` 通过 Tool Gateway 执行租户/元数据过滤，并将索引版本、分数和来源写入 Evidence
 - 原 `get_runbook` 已成为版本化检索索引的兼容适配器，现有 Agent suite 与故障注入合同保持稳定
 - Context Engine 输出不含审批、工单等 Runtime artifacts 的结构化 Working Memory
@@ -68,14 +71,16 @@
 
 ## 当前能力边界
 
-RAG 的确定性 R0–R2 基线已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
+RAG 的确定性 R0–R2、公开 Markdown 摄取与学习型 Embedding 对比已经实现，但以下能力仍属于下一阶段，不能作为当前成果宣传：
 
-- 公开许可语料的 Markdown/PDF 解析，以及学习型 Embedding 与持久化向量索引
-- 学习型 Dense Retrieval、Cross-Encoder Reranker 与经过真实数据验证的 Hybrid 链路
+- PDF/站点模板语义解析与持久化向量索引
+- Cross-Encoder Reranker 与经过真实数据验证的 Hybrid 链路
 - 80–100 条人工审核的开发/保留检索集与引用忠实度评测
 - Episodic Memory 的语义相似度召回、版本替换、独立多轮评测集和人工审核数据
 
-当前 R0–R2 使用项目自编合成语料，只用于固定数据合同、检索评测与 Runtime 集成，不能据此宣称真实语义检索效果。在当前短文档集上 BM25 优于 hashing Dense 和 RRF，因此 `search_knowledge` 暂时默认 BM25；引入学习型 Embedding 后必须重新评测再决定是否切换 Hybrid。Episodic Memory v1 只按可信 tenant identity、service 和时间倒序召回，不能等同于已经完成语义 Memory Search。
+公开实验使用 Kubernetes 与 Prometheus 的 20 篇官方 Markdown 文档，以及 40 条来源导出正例和 4 条范围隔离负例。问题由文档内容编写，尚未盲审、未做 pooled judgment，也没有同域语义 hard negative，因此它只是可复现 smoke set，不是 held-out 质量结论。BGE-M3 Dense 在这套草案上排名最高；Hybrid 没有超过 Dense，`scope_isolation_accuracy=1.0` 也不代表安全拒答能力。Runtime 仍默认使用无需模型依赖的 BM25。
+
+Episodic Memory v1 只按可信 tenant identity、service 和时间倒序召回，不能等同于已经完成语义 Memory Search。
 
 当前演示任务：
 
@@ -184,6 +189,39 @@ PYTHONPATH=src python -m enterprise_agent retrieval-benchmark \
 
 `--strategy` 支持 `dense`、`bm25` 和 `hybrid`。默认加载 10 份项目自编合成文档和 30 条 retrieval smoke case。报告会记录语料、suite、Embedding 和索引版本；也可以用 `--corpus`、`--suite` 和 `--top-k` 加载外部版本化数据。
 
+构建首批公开语料（首次运行会从两个 HTTPS Git 仓库获取固定提交）：
+
+```bash
+PYTHONPATH=src python -m enterprise_agent corpus-build \
+  --manifest src/enterprise_agent/corpus_manifests/public-ops-v1.json \
+  --cache-dir work/corpus-cache \
+  --output work/corpora/public-ops-v1.json
+
+PYTHONPATH=src python -m enterprise_agent corpus-build \
+  --manifest src/enterprise_agent/corpus_manifests/public-ops-v1.json \
+  --cache-dir work/corpus-cache \
+  --output work/corpora/public-ops-v1.json \
+  --offline --overwrite
+```
+
+完整第三方正文和裸 Git 缓存只保存在已忽略的 `work/`；仓库只跟踪 manifest、评测集和默认脱敏的报告。许可、署名、NOTICE 与再分发边界见 [公开语料说明](docs/public-corpus.md)。
+
+安装可选依赖后，可用固定模型 revision 复现实验；`--embedding-local-path` 可指向已下载模型，从而避免运行时联网：
+
+```bash
+python -m pip install -e '.[rag]'
+
+PYTHONPATH=src python -m enterprise_agent retrieval-benchmark \
+  --strategy hybrid \
+  --embedding-model BAAI/bge-m3 \
+  --embedding-revision 5617a9f61b028005a4858fdac845db406aefb181 \
+  --embedding-local-path work/models/bge-m3 \
+  --embedding-device cuda \
+  --output work/retrieval-bge-m3-hybrid.json
+```
+
+公开语料报告见 [BGE-M3 Dense](benchmarks/retrieval-public-ops-bge-m3-dense-v2.json)、[BGE-M3 Hybrid](benchmarks/retrieval-public-ops-bge-m3-hybrid-v2.json)、[BM25](benchmarks/retrieval-public-ops-bm25-v2.json)、[Hashing Dense](benchmarks/retrieval-public-ops-hashing-dense-v2.json) 和 [Hashing Hybrid](benchmarks/retrieval-public-ops-hashing-hybrid-v2.json)。报告默认删除结果正文；只有显式传入 `--include-result-text` 才会写入片段。
+
 只运行核心策略可使用 `--strategies single_agent multi_agent adaptive_harness`。每个 case/strategy/repetition 使用独立数据库，防止故障计数、熔断状态和幂等数据串扰。
 
 也可以加载一个外部 suite 文件或目录；新增 case 不需要修改策略代码：
@@ -287,6 +325,7 @@ enterprise-agent/
 - [`docs/benchmarking.md`](docs/benchmarking.md)：策略定义、指标契约与结果解释
 - [`docs/model-provider.md`](docs/model-provider.md)：DeepSeek 配置、结构化契约和失败语义
 - [`docs/rag-memory.md`](docs/rag-memory.md)：RAG、Working Memory、Episodic Memory 的范围、合同与实施顺序
+- [`docs/public-corpus.md`](docs/public-corpus.md)：公开语料来源、可复现构建、许可与评测限制
 - [`evaluation.md`](evaluation.md)：数据集、指标与实验记录
 
 ## 开发原则
@@ -301,8 +340,8 @@ enterprise-agent/
 
 ## 下一阶段
 
-1. 冻结一组公开、可分享的 Runbook、事故复盘和运维 SOP 语料，并建立首批检索标注集。
-2. 用公开许可语料和学习型 Embedding 替换当前合成/hashing 基线，再增加 Reranker 和引用忠实度评测。
+1. 对首批公开语料的 40 条正例做独立人工复核，并增加同域语义 hard negative 与 held-out 集。
+2. 在冻结的公开语料上增加 Reranker、引用忠实度和多相关文档 pooled judgment。
 3. 将 Memory 合同扩展为独立多轮 suite，增加版本替换、更多服务和人工审核的冲突样本。
 4. 人工复核新增 15 条 synthetic draft，并将 Agent、检索和 Memory 评测集分别扩展，避免用同一数据同时调策略和宣称效果。
 5. 数据合同稳定后增加 PostgreSQL、Worker lease、OpenTelemetry、离线 replay 和真实连接器。

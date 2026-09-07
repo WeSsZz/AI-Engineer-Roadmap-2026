@@ -1,0 +1,186 @@
+{
+  "manifest_version": "git-markdown-corpus-v1",
+  "corpus_id": "public-ops-docs",
+  "version": "1.0.0",
+  "tenant_id": "demo",
+  "sources": [
+    {
+      "source_id": "kubernetes-website",
+      "repository_url": "https://github.com/kubernetes/website.git",
+      "commit": "22cc5093581b4dc74394bdce60753d5caf13ddf0",
+      "source_uri_template": "https://github.com/kubernetes/website/blob/{commit}/{path}",
+      "source_type": "official-documentation",
+      "license": {
+        "spdx_id": "CC-BY-4.0",
+        "path": "LICENSE",
+        "url": "https://github.com/kubernetes/website/blob/22cc5093581b4dc74394bdce60753d5caf13ddf0/LICENSE",
+        "attribution": "The Kubernetes Authors",
+        "content_sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+        "notice": null
+      },
+      "documents": [
+        {
+          "document_id": "k8s-debug-pods",
+          "title": "Debug Pods",
+          "path": "content/en/docs/tasks/debug/debug-application/debug-pods.md",
+          "content_sha256": "fa0695bdcee4608cf1ebd4d7a3891e353e7764e566eb40ef738c5b98f5bc3645",
+          "metadata": {"product": "kubernetes", "topic": "pod-debugging", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-debug-running-pod",
+          "title": "Debug Running Pods",
+          "path": "content/en/docs/tasks/debug/debug-application/debug-running-pod.md",
+          "content_sha256": "ec96ce1a6c370020a9162cae98aba5b1a04113365815613ecdb1f658cfa2e08f",
+          "metadata": {"product": "kubernetes", "topic": "running-pod-debugging", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-pod-failure-reason",
+          "title": "Determine the Reason for Pod Failure",
+          "path": "content/en/docs/tasks/debug/debug-application/determine-reason-pod-failure.md",
+          "content_sha256": "b43a3dad47d2428042e5a5d2b32c586fa1b0504cdcdfd9513874b8bfce35f57d",
+          "metadata": {"product": "kubernetes", "topic": "pod-failure", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-debug-service",
+          "title": "Debug Services",
+          "path": "content/en/docs/tasks/debug/debug-application/debug-service.md",
+          "content_sha256": "76915e474e88fbedecbfe205fb45a85867ea4612453358eda73a330ec991262d",
+          "metadata": {"product": "kubernetes", "topic": "service-debugging", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-debug-statefulset",
+          "title": "Debug a StatefulSet",
+          "path": "content/en/docs/tasks/debug/debug-application/debug-statefulset.md",
+          "content_sha256": "58b7fd144331cdbcc9a939f62076a94a554385eca92c7fde3287e56c693c89d3",
+          "metadata": {"product": "kubernetes", "topic": "statefulset-debugging", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-debug-init-containers",
+          "title": "Debug Init Containers",
+          "path": "content/en/docs/tasks/debug/debug-application/debug-init-containers.md",
+          "content_sha256": "9ba39ad75be1775d25a5f9432cbb93702cb19fb63636ecaa9ed3253240a53249",
+          "metadata": {"product": "kubernetes", "topic": "init-container-debugging", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-pod-lifecycle",
+          "title": "Pod Lifecycle",
+          "path": "content/en/docs/concepts/workloads/pods/pod-lifecycle.md",
+          "content_sha256": "a22f3a96a41e7613e61beb292fc28fa45b9f68e8f65e493e3e940ed1d35a8b51",
+          "metadata": {"product": "kubernetes", "topic": "pod-lifecycle", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-probes",
+          "title": "Liveness, Readiness, and Startup Probes",
+          "path": "content/en/docs/concepts/workloads/pods/probes.md",
+          "content_sha256": "ac0f526d6708c6cd720982d2c7e02ce5a61547cddc07f964957daa946f38372f",
+          "metadata": {"product": "kubernetes", "topic": "health-probes", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-pod-qos",
+          "title": "Pod Quality of Service Classes",
+          "path": "content/en/docs/concepts/workloads/pods/pod-qos.md",
+          "content_sha256": "4779ca55d8811a8a7eac0a187e2e404f023d89ca2de638462e72e3fcbee0c5ef",
+          "metadata": {"product": "kubernetes", "topic": "pod-qos", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-dns-pod-service",
+          "title": "DNS for Services and Pods",
+          "path": "content/en/docs/concepts/services-networking/dns-pod-service.md",
+          "content_sha256": "29dad6c4a41b72ee310938f10902761877eebe38f5bd548172413b2a4801a568",
+          "metadata": {"product": "kubernetes", "topic": "dns", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-ephemeral-storage",
+          "title": "Local Ephemeral Storage",
+          "path": "content/en/docs/concepts/storage/ephemeral-storage.md",
+          "content_sha256": "502614f23cf3a94566d6e7d3b4414b97e0d6f56178fc0523b27f5ac8e1854297",
+          "metadata": {"product": "kubernetes", "topic": "ephemeral-storage", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "k8s-resource-metrics-pipeline",
+          "title": "Resource Metrics Pipeline",
+          "path": "content/en/docs/tasks/debug/debug-cluster/resource-metrics-pipeline.md",
+          "content_sha256": "8e8ac335293b664cc54475344e444e42e3fe548054658ea7979fa90732e7ef65",
+          "metadata": {"product": "kubernetes", "topic": "resource-metrics", "language": "en", "review_status": "source-selected-unreviewed"}
+        }
+      ]
+    },
+    {
+      "source_id": "prometheus-core",
+      "repository_url": "https://github.com/prometheus/prometheus.git",
+      "commit": "0923fdef23c3468ce4afdb3f2cb6c14a79037214",
+      "source_uri_template": "https://github.com/prometheus/prometheus/blob/{commit}/{path}",
+      "source_type": "official-documentation",
+      "license": {
+        "spdx_id": "Apache-2.0",
+        "path": "LICENSE",
+        "url": "https://github.com/prometheus/prometheus/blob/0923fdef23c3468ce4afdb3f2cb6c14a79037214/LICENSE",
+        "attribution": "The Prometheus Authors",
+        "content_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "notice": {
+          "path": "NOTICE",
+          "url": "https://github.com/prometheus/prometheus/blob/0923fdef23c3468ce4afdb3f2cb6c14a79037214/NOTICE",
+          "content_sha256": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78"
+        }
+      },
+      "documents": [
+        {
+          "document_id": "prom-getting-started",
+          "title": "Getting Started with Prometheus",
+          "path": "docs/getting_started.md",
+          "content_sha256": "a6763549143b6eb48f80edfe0e6c062aa2473aded4f84e28f065940cc0826cbc",
+          "metadata": {"product": "prometheus", "topic": "getting-started", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-alerting-rules",
+          "title": "Alerting Rules",
+          "path": "docs/configuration/alerting_rules.md",
+          "content_sha256": "92085dedf36ae2a9f16aa008931379815397862a9aee835f888ce087a741b7b5",
+          "metadata": {"product": "prometheus", "topic": "alerting-rules", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-recording-rules",
+          "title": "Recording Rules",
+          "path": "docs/configuration/recording_rules.md",
+          "content_sha256": "7d9a9264340a9612d7153aba57641555203ad4433ef393a5a4635d0e2a62fda7",
+          "metadata": {"product": "prometheus", "topic": "recording-rules", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-unit-testing-rules",
+          "title": "Unit Testing for Rules",
+          "path": "docs/configuration/unit_testing_rules.md",
+          "content_sha256": "91cce055d270e16897eb65e173a66156f7e3a95dd210440e02e7dbba165dab5e",
+          "metadata": {"product": "prometheus", "topic": "rule-testing", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-querying-basics",
+          "title": "PromQL Querying Basics",
+          "path": "docs/querying/basics.md",
+          "content_sha256": "bdf7feaa71b6e6cddb1c143974e579c9d3c5ea19c6e6b4af16f0f9927c9f6853",
+          "metadata": {"product": "prometheus", "topic": "promql", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-storage",
+          "title": "Prometheus Storage",
+          "path": "docs/storage.md",
+          "content_sha256": "7ea93bb1e7b4a733072d510dc068d0f66d678b46285c76fae55fa96a58d9173a",
+          "metadata": {"product": "prometheus", "topic": "storage", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-agent-mode",
+          "title": "Prometheus Agent Mode",
+          "path": "docs/prometheus_agent.md",
+          "content_sha256": "abf7b0659be4073613d01929e2ac21063b4132bb970ebbdc29c2832e85d9869c",
+          "metadata": {"product": "prometheus", "topic": "agent-mode", "language": "en", "review_status": "source-selected-unreviewed"}
+        },
+        {
+          "document_id": "prom-federation",
+          "title": "Prometheus Federation",
+          "path": "docs/federation.md",
+          "content_sha256": "b699d8d7252b54b992701003e54cc43215723a788887b7ad5675eb302fe7fda5",
+          "metadata": {"product": "prometheus", "topic": "federation", "language": "en", "review_status": "source-selected-unreviewed"}
+        }
+      ]
+    }
+  ]
+}

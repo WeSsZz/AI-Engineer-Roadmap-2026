@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -310,7 +311,7 @@ class ToolGatewayTests(unittest.TestCase):
                 ]
                 outputs = [future.result(timeout=2) for future in futures]
             self.assertEqual({output.data["id"] for output in outputs}, {"INC-0001"})
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM demo_tickets").fetchone()[0], 1)
 
 
